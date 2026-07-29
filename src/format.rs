@@ -1,8 +1,9 @@
-//! Colored one-line rendering for every mode.
+//! Column-driven colored rendering.
 
 use std::io::{self, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::columns::Column;
 use crate::entry::{Entry, Kind};
 
 pub const WHITE: &str = "\x1b[97m";
@@ -13,80 +14,104 @@ pub const ORANGE: &str = "\x1b[38;5;214m";
 pub const DIM: &str = "\x1b[90m";
 /// Slightly brighter than DIM — used for SIZE so it stays secondary to names.
 pub const SOFT: &str = "\x1b[38;5;247m";
-/// Hidden (dot) entries — distinct colors from the main palette.
-pub const HIDDEN_FILE: &str = "\x1b[38;5;87m"; // cyan
-pub const HIDDEN_DIR: &str = "\x1b[38;5;141m"; // violet
-pub const HIDDEN_EXEC: &str = "\x1b[38;5;227m"; // yellow
-pub const HIDDEN_LINK: &str = "\x1b[38;5;213m"; // pink
+pub const HIDDEN_FILE: &str = "\x1b[38;5;87m";
+pub const HIDDEN_DIR: &str = "\x1b[38;5;141m";
+pub const HIDDEN_EXEC: &str = "\x1b[38;5;227m";
+pub const HIDDEN_LINK: &str = "\x1b[38;5;213m";
 pub const RESET: &str = "\x1b[0m";
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    /// mode size mtime name
-    Basic,
-    /// + owner, links, times, inode, flags, xattrs, …
-    All,
-    /// + cheap XFS fields
-    Full,
-}
 
 #[derive(Default)]
 pub struct Widths {
-    mode: usize,
+    perms: usize,
     nlink: usize,
     user: usize,
     group: usize,
     size: usize,
-    blocks: usize, // "Nb/blksize"
-    ino: usize,    // "ino:igen"
+    blocks: usize,
+    ino: usize,
     dev: usize,
-    time: usize, // "DD-MM-YYYY HH:MM:SS"
+    time: usize,
     flags: usize,
     xattrs: usize,
     xfs: usize,
 }
 
 impl Widths {
-    pub fn measure(entries: &[Entry], mode: Mode) -> Self {
+    pub fn measure(entries: &[Entry], cols: &[Column]) -> Self {
         let mut w = Self {
-            mode: "PERMS".len(),
-            size: "SIZE".len(),
-            nlink: "N".len(),
-            user: "USER".len(),
-            group: "GROUP".len(),
-            blocks: "BLOCKS".len(),
-            ino: "INO:IGEN".len(),
-            dev: "DEV".len(),
             time: "DD-MM-YYYY HH:MM:SS".len(),
-            flags: "FLAGS".len(),
-            xattrs: "XATTRS".len(),
-            xfs: "XFS".len(),
+            ..Default::default()
         };
 
-        for e in entries {
-            w.mode = w.mode.max(e.mode_string().len());
-            w.size = w.size.max(human_size(e.size).len());
-            w.user = w.user.max(e.user.len());
-            w.group = w.group.max(e.group.len());
-            if mode == Mode::Basic {
-                continue;
+        for c in cols {
+            match c {
+                Column::Perms => w.perms = w.perms.max("PERMS".len()),
+                Column::User => w.user = w.user.max("USER".len()),
+                Column::Group => w.group = w.group.max("GROUP".len()),
+                Column::Size => w.size = w.size.max("SIZE".len()),
+                Column::Nlink => w.nlink = w.nlink.max("N".len()),
+                Column::Blocks => w.blocks = w.blocks.max("BLOCKS".len()),
+                Column::Ino => w.ino = w.ino.max("INO:IGEN".len()),
+                Column::Dev => w.dev = w.dev.max("DEV".len()),
+                Column::Flags => w.flags = w.flags.max("FLAGS".len()),
+                Column::Xattrs => w.xattrs = w.xattrs.max("XATTRS".len()),
+                Column::Xfs => w.xfs = w.xfs.max("XFS".len()),
+                Column::Mtime
+                | Column::Atime
+                | Column::Ctime
+                | Column::Birth
+                | Column::Sparse
+                | Column::Name => {}
             }
-            w.nlink = w.nlink.max(e.nlink.to_string().len());
-            w.blocks = w.blocks.max(format!("{}b/{}", e.blocks, e.blksize).len());
-            w.ino = w.ino.max(format_ino(e).len());
-            w.dev = w.dev.max(format_dev(e).len());
-            w.flags = w.flags.max(join_or_dash(&e.extras.flags).len());
-            let xa = if e.extras.xattrs.is_empty() {
-                "-".to_string()
-            } else {
-                e.extras.xattrs.join(",")
-            };
-            w.xattrs = w.xattrs.max(xa.len());
-            if mode == Mode::Full {
-                w.xfs = w.xfs.max(format_xfs(e).len());
+        }
+
+        for e in entries {
+            for c in cols {
+                match c {
+                    Column::Perms => w.perms = w.perms.max(e.mode_string().len()),
+                    Column::User => w.user = w.user.max(e.user.len()),
+                    Column::Group => w.group = w.group.max(e.group.len()),
+                    Column::Size => w.size = w.size.max(human_size(e.size).len()),
+                    Column::Nlink => w.nlink = w.nlink.max(e.nlink.to_string().len()),
+                    Column::Blocks => {
+                        w.blocks = w.blocks.max(format!("{}b/{}", e.blocks, e.blksize).len())
+                    }
+                    Column::Ino => w.ino = w.ino.max(format_ino(e).len()),
+                    Column::Dev => w.dev = w.dev.max(format_dev(e).len()),
+                    Column::Flags => w.flags = w.flags.max(join_or_dash(&e.extras.flags).len()),
+                    Column::Xattrs => {
+                        let xa = if e.extras.xattrs.is_empty() {
+                            "-".to_string()
+                        } else {
+                            e.extras.xattrs.join(",")
+                        };
+                        w.xattrs = w.xattrs.max(xa.len());
+                    }
+                    Column::Xfs => w.xfs = w.xfs.max(format_xfs(e).len()),
+                    _ => {}
+                }
             }
         }
         w
+    }
+
+    fn width_for(&self, c: Column) -> usize {
+        match c {
+            Column::Perms => self.perms,
+            Column::User => self.user,
+            Column::Group => self.group,
+            Column::Size => self.size,
+            Column::Nlink => self.nlink,
+            Column::Blocks => self.blocks,
+            Column::Ino => self.ino,
+            Column::Dev => self.dev,
+            Column::Flags => self.flags,
+            Column::Xattrs => self.xattrs,
+            Column::Xfs => self.xfs,
+            Column::Mtime | Column::Atime | Column::Ctime | Column::Birth => self.time,
+            Column::Sparse => 1,
+            Column::Name => 0,
+        }
     }
 }
 
@@ -109,143 +134,129 @@ pub fn color_for(e: &Entry) -> &'static str {
     }
 }
 
-pub fn write_header(out: &mut impl Write, mode: Mode, w: &Widths) -> io::Result<()> {
-    match mode {
-        Mode::Basic => writeln!(
+pub fn write_header(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Result<()> {
+    for (i, c) in cols.iter().enumerate() {
+        if i > 0 {
+            write!(out, " ")?;
+        }
+        let label = c.header();
+        let width = w.width_for(*c);
+        if width == 0 {
+            write!(out, "{LIGHT_BLUE}{label}{RESET}")?;
+        } else if matches!(c, Column::Size | Column::Nlink) {
+            write!(out, "{LIGHT_BLUE}{label:>width$}{RESET}")?;
+        } else {
+            write!(out, "{LIGHT_BLUE}{label:<width$}{RESET}")?;
+        }
+    }
+    writeln!(out)
+}
+
+pub fn write_entry(out: &mut impl Write, e: &Entry, cols: &[Column], w: &Widths) -> io::Result<()> {
+    for (i, c) in cols.iter().enumerate() {
+        if i > 0 {
+            write!(out, " ")?;
+        }
+        write_column(out, e, *c, w)?;
+    }
+    writeln!(out)
+}
+
+fn write_column(out: &mut impl Write, e: &Entry, c: Column, w: &Widths) -> io::Result<()> {
+    match c {
+        Column::Mtime => write!(
             out,
-            "{LIGHT_BLUE}{mtime:<tw$} {perms:<pw$} {user:<uw$} {group:<gw$} {size:>sw$} {name}{RESET}",
-            mtime = "MTIME",
-            perms = "PERMS",
-            user = "USER",
-            group = "GROUP",
-            size = "SIZE",
-            name = "NAME",
-            tw = w.time,
-            pw = w.mode,
-            uw = w.user,
-            gw = w.group,
-            sw = w.size,
+            "{DIM}{v:<width$}{RESET}",
+            v = fmt_time_short(e.mtime),
+            width = w.time
         ),
-        Mode::All => write_detail_header(out, w, false),
-        Mode::Full => write_detail_header(out, w, true),
+        Column::Atime => write!(
+            out,
+            "{DIM}{v:<width$}{RESET}",
+            v = fmt_time_short(e.atime),
+            width = w.time
+        ),
+        Column::Ctime => write!(
+            out,
+            "{DIM}{v:<width$}{RESET}",
+            v = fmt_epoch_short(e.ctime_secs),
+            width = w.time
+        ),
+        Column::Birth => write!(
+            out,
+            "{DIM}{v:<width$}{RESET}",
+            v = fmt_time_short(e.birth),
+            width = w.time
+        ),
+        Column::Perms => write_perms(out, e, w.perms),
+        Column::User => write!(
+            out,
+            "{LIGHT_BLUE}{v:<width$}{RESET}",
+            v = e.user,
+            width = w.user
+        ),
+        Column::Group => write!(
+            out,
+            "{LIGHT_BLUE}{v:<width$}{RESET}",
+            v = e.group,
+            width = w.group
+        ),
+        Column::Size => write!(
+            out,
+            "{SOFT}{v:>width$}{RESET}",
+            v = human_size(e.size),
+            width = w.size
+        ),
+        Column::Name => write_name(out, e, color_for(e)),
+        Column::Nlink => write!(
+            out,
+            "{WHITE}{v:>width$}{RESET}",
+            v = e.nlink,
+            width = w.nlink
+        ),
+        Column::Blocks => write!(
+            out,
+            "{DIM}{v:<width$}{RESET}",
+            v = format!("{}b/{}", e.blocks, e.blksize),
+            width = w.blocks
+        ),
+        Column::Sparse => {
+            let s = if e.sparse { "S" } else { "-" };
+            write!(out, "{DIM}{s}{RESET}")
+        }
+        Column::Ino => write!(
+            out,
+            "{DIM}{v:<width$}{RESET}",
+            v = format_ino(e),
+            width = w.ino
+        ),
+        Column::Dev => write!(
+            out,
+            "{DIM}{v:<width$}{RESET}",
+            v = format_dev(e),
+            width = w.dev
+        ),
+        Column::Flags => write!(
+            out,
+            "{ORANGE}{v:<width$}{RESET}",
+            v = join_or_dash(&e.extras.flags),
+            width = w.flags
+        ),
+        Column::Xattrs => {
+            let xa = if e.extras.xattrs.is_empty() {
+                "-".to_string()
+            } else {
+                e.extras.xattrs.join(",")
+            };
+            write!(out, "{ORANGE}{v:<width$}{RESET}", v = xa, width = w.xattrs)
+        }
+        Column::Xfs => write!(
+            out,
+            "{ORANGE}{v:<width$}{RESET}",
+            v = format_xfs(e),
+            width = w.xfs
+        ),
     }
-}
-
-fn write_detail_header(out: &mut impl Write, w: &Widths, xfs: bool) -> io::Result<()> {
-    write!(
-        out,
-        "{LIGHT_BLUE}{mtime:<tw$} {perms:<pw$} {nlink:>nw$} {user:<uw$} {group:<gw$} {size:>sw$} {blocks:<bw$} {sp} {ino:<iw$} {dev:<dw$} {atime:<tw$} {ctime:<tw$} {birth:<tw$} {flags:<fw$} {xattrs:<xw$}",
-        mtime = "MTIME",
-        perms = "PERMS",
-        nlink = "N",
-        user = "USER",
-        group = "GROUP",
-        size = "SIZE",
-        blocks = "BLOCKS",
-        sp = "S",
-        ino = "INO:IGEN",
-        dev = "DEV",
-        atime = "ATIME",
-        ctime = "CTIME",
-        birth = "BIRTH",
-        flags = "FLAGS",
-        xattrs = "XATTRS",
-        tw = w.time,
-        pw = w.mode,
-        nw = w.nlink,
-        uw = w.user,
-        gw = w.group,
-        sw = w.size,
-        bw = w.blocks,
-        iw = w.ino,
-        dw = w.dev,
-        fw = w.flags,
-        xw = w.xattrs,
-    )?;
-    if xfs {
-        write!(out, " {xfs:<xw$}", xfs = "XFS", xw = w.xfs)?;
-    }
-    writeln!(out, " {name}{RESET}", name = "NAME")
-}
-
-pub fn write_entry(out: &mut impl Write, e: &Entry, mode: Mode, w: &Widths) -> io::Result<()> {
-    match mode {
-        Mode::Basic => write_basic(out, e, w),
-        Mode::All => write_all(out, e, w, false),
-        Mode::Full => write_all(out, e, w, true),
-    }
-}
-
-fn write_basic(out: &mut impl Write, e: &Entry, w: &Widths) -> io::Result<()> {
-    let color = color_for(e);
-    let size = human_size(e.size);
-    let mtime = fmt_time_short(e.mtime);
-
-    write!(out, "{DIM}{mtime:<tw$}{RESET} ", tw = w.time)?;
-    write_perms(out, e, w.mode)?;
-    write!(
-        out,
-        " {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {SOFT}{size:>sw$}{RESET} ",
-        user = e.user,
-        group = e.group,
-        uw = w.user,
-        gw = w.group,
-        sw = w.size,
-    )?;
-    write_name(out, e, color)?;
-    writeln!(out)
-}
-
-fn write_all(out: &mut impl Write, e: &Entry, w: &Widths, xfs: bool) -> io::Result<()> {
-    let color = color_for(e);
-    let size = human_size(e.size);
-    let nlink = e.nlink.to_string();
-    let blocks = format!("{}b/{}", e.blocks, e.blksize);
-    let ino = format_ino(e);
-    let dev = format_dev(e);
-    let flags = join_or_dash(&e.extras.flags);
-    let xattrs = if e.extras.xattrs.is_empty() {
-        "-".into()
-    } else {
-        e.extras.xattrs.join(",")
-    };
-    let sparse = if e.sparse { "S" } else { "-" };
-
-    write!(
-        out,
-        "{DIM}{mtime:<tw$}{RESET} ",
-        mtime = fmt_time_short(e.mtime),
-        tw = w.time,
-    )?;
-    write_perms(out, e, w.mode)?;
-    write!(
-        out,
-        " {WHITE}{nlink:>nw$}{RESET} {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {SOFT}{size:>sw$}{RESET} {DIM}{blocks:<bw$}{RESET} {DIM}{sparse}{RESET} {DIM}{ino:<iw$}{RESET} {DIM}{dev:<dw$}{RESET} {DIM}{atime:<tw$}{RESET} {DIM}{ctime:<tw$}{RESET} {DIM}{birth:<tw$}{RESET} {ORANGE}{flags:<fw$}{RESET} {ORANGE}{xattrs:<xw$}{RESET}",
-        user = e.user,
-        group = e.group,
-        nw = w.nlink,
-        uw = w.user,
-        gw = w.group,
-        sw = w.size,
-        bw = w.blocks,
-        iw = w.ino,
-        dw = w.dev,
-        tw = w.time,
-        fw = w.flags,
-        xw = w.xattrs,
-        atime = fmt_time_short(e.atime),
-        ctime = fmt_epoch_short(e.ctime_secs),
-        birth = fmt_time_short(e.birth),
-    )?;
-
-    if xfs {
-        let x = format_xfs(e);
-        write!(out, " {ORANGE}{x:<xw$}{RESET}", xw = w.xfs)?;
-    }
-
-    write!(out, " ")?;
-    write_name(out, e, color)?;
-    writeln!(out)
 }
 
 fn format_ino(e: &Entry) -> String {
@@ -282,11 +293,6 @@ fn format_xfs(e: &Entry) -> String {
     }
 }
 
-/// Color-coded classic permissions (`drwxr-xr-x`), padded to `width`.
-///
-/// - type char: entry color
-/// - `r` white · `w` red · `x` green · `s`/`S`/`t`/`T` orange · `-` dim
-/// - `+` ACL light blue · `@` xattr orange
 fn write_perms(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
     let plain = e.mode_string();
     let type_color = color_for(e);
@@ -372,7 +378,6 @@ fn system_parts(t: SystemTime) -> Option<(u64, u64, u64, u64, u64, u64)> {
     let mi = (tod % 3600) / 60;
     let s = tod % 60;
 
-    // Howard Hinnant civil_from_days (UTC)
     let z = z as i64 + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = (z - era * 146097) as u64;
