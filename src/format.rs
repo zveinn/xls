@@ -7,6 +7,7 @@ use crate::columns::Column;
 use crate::entry::{Entry, Kind};
 
 pub const WHITE: &str = "\x1b[97m";
+pub const BOLD_WHITE: &str = "\x1b[1;97m";
 pub const LIGHT_BLUE: &str = "\x1b[38;5;117m";
 pub const GREEN: &str = "\x1b[92m";
 pub const RED: &str = "\x1b[91m";
@@ -142,11 +143,11 @@ pub fn write_header(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Re
         let label = c.header();
         let width = w.width_for(*c);
         if width == 0 {
-            write!(out, "{LIGHT_BLUE}{label}{RESET}")?;
+            write!(out, "{BOLD_WHITE}{label}{RESET}")?;
         } else if matches!(c, Column::Size | Column::Nlink) {
-            write!(out, "{LIGHT_BLUE}{label:>width$}{RESET}")?;
+            write!(out, "{BOLD_WHITE}{label:>width$}{RESET}")?;
         } else {
-            write!(out, "{LIGHT_BLUE}{label:<width$}{RESET}")?;
+            write!(out, "{BOLD_WHITE}{label:<width$}{RESET}")?;
         }
     }
     writeln!(out)

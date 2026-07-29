@@ -192,7 +192,8 @@ fn print_help() {
 
 {h}COLORS{RESET}
   {WHITE}white{RESET}        regular file
-  {LIGHT_BLUE}light blue{RESET}   directory (and headers)
+  {LIGHT_BLUE}light blue{RESET}   directory
+  {WHITE}bold white{RESET}    column headers
   {GREEN}green{RESET}        executable
   {o}orange{RESET}       symlink / special file
   {RED}red{RESET}          error or broken symlink
