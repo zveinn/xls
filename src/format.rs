@@ -11,6 +11,8 @@ pub const GREEN: &str = "\x1b[92m";
 pub const RED: &str = "\x1b[91m";
 pub const ORANGE: &str = "\x1b[38;5;214m";
 pub const DIM: &str = "\x1b[90m";
+/// Slightly brighter than DIM — used for SIZE so it stays secondary to names.
+pub const SOFT: &str = "\x1b[38;5;247m";
 /// Hidden (dot) entries — distinct colors from the main palette.
 pub const HIDDEN_FILE: &str = "\x1b[38;5;87m"; // cyan
 pub const HIDDEN_DIR: &str = "\x1b[38;5;141m"; // violet
@@ -38,7 +40,7 @@ pub struct Widths {
     blocks: usize, // "Nb/blksize"
     ino: usize,    // "ino:igen"
     dev: usize,
-    time: usize, // "MM-DD HH:MM"
+    time: usize, // "DD-MM-YYYY HH:MM:SS"
     flags: usize,
     xattrs: usize,
     xfs: usize,
@@ -55,7 +57,7 @@ impl Widths {
             blocks: "BLOCKS".len(),
             ino: "INO:IGEN".len(),
             dev: "DEV".len(),
-            time: "MM-DD HH:MM".len().max(11),
+            time: "DD-MM-YYYY HH:MM:SS".len(),
             flags: "FLAGS".len(),
             xattrs: "XATTRS".len(),
             xfs: "XFS".len(),
@@ -64,12 +66,12 @@ impl Widths {
         for e in entries {
             w.mode = w.mode.max(e.mode_string().len());
             w.size = w.size.max(human_size(e.size).len());
+            w.user = w.user.max(e.user.len());
+            w.group = w.group.max(e.group.len());
             if mode == Mode::Basic {
                 continue;
             }
             w.nlink = w.nlink.max(e.nlink.to_string().len());
-            w.user = w.user.max(e.user.len());
-            w.group = w.group.max(e.group.len());
             w.blocks = w.blocks.max(format!("{}b/{}", e.blocks, e.blksize).len());
             w.ino = w.ino.max(format_ino(e).len());
             w.dev = w.dev.max(format_dev(e).len());
@@ -111,14 +113,18 @@ pub fn write_header(out: &mut impl Write, mode: Mode, w: &Widths) -> io::Result<
     match mode {
         Mode::Basic => writeln!(
             out,
-            "{LIGHT_BLUE}{perms:<pw$} {size:>sw$} {mtime:<tw$} {name}{RESET}",
+            "{LIGHT_BLUE}{perms:<pw$} {user:<uw$} {group:<gw$} {mtime:<tw$} {size:>sw$} {name}{RESET}",
             perms = "PERMS",
-            size = "SIZE",
+            user = "USER",
+            group = "GROUP",
             mtime = "MTIME",
+            size = "SIZE",
             name = "NAME",
             pw = w.mode,
-            sw = w.size,
+            uw = w.user,
+            gw = w.group,
             tw = w.time,
+            sw = w.size,
         ),
         Mode::All => write_detail_header(out, w, false),
         Mode::Full => write_detail_header(out, w, true),
@@ -178,9 +184,13 @@ fn write_basic(out: &mut impl Write, e: &Entry, w: &Widths) -> io::Result<()> {
     write_perms(out, e, w.mode)?;
     write!(
         out,
-        " {WHITE}{size:>sw$}{RESET} {DIM}{mtime:<tw$}{RESET} ",
-        sw = w.size,
+        " {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {DIM}{mtime:<tw$}{RESET} {SOFT}{size:>sw$}{RESET} ",
+        user = e.user,
+        group = e.group,
+        uw = w.user,
+        gw = w.group,
         tw = w.time,
+        sw = w.size,
     )?;
     write_name(out, e, color)?;
     writeln!(out)
@@ -204,7 +214,7 @@ fn write_all(out: &mut impl Write, e: &Entry, w: &Widths, xfs: bool) -> io::Resu
     write_perms(out, e, w.mode)?;
     write!(
         out,
-        " {WHITE}{nlink:>nw$}{RESET} {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {WHITE}{size:>sw$}{RESET} {DIM}{blocks:<bw$}{RESET} {DIM}{sparse}{RESET} {DIM}{ino:<iw$}{RESET} {DIM}{dev:<dw$}{RESET} {DIM}{mtime:<tw$}{RESET} {DIM}{atime:<tw$}{RESET} {DIM}{ctime:<tw$}{RESET} {DIM}{birth:<tw$}{RESET} {ORANGE}{flags:<fw$}{RESET} {ORANGE}{xattrs:<xw$}{RESET}",
+        " {WHITE}{nlink:>nw$}{RESET} {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {SOFT}{size:>sw$}{RESET} {DIM}{blocks:<bw$}{RESET} {DIM}{sparse}{RESET} {DIM}{ino:<iw$}{RESET} {DIM}{dev:<dw$}{RESET} {DIM}{mtime:<tw$}{RESET} {DIM}{atime:<tw$}{RESET} {DIM}{ctime:<tw$}{RESET} {DIM}{birth:<tw$}{RESET} {ORANGE}{flags:<fw$}{RESET} {ORANGE}{xattrs:<xw$}{RESET}",
         user = e.user,
         group = e.group,
         nw = w.nlink,
@@ -267,12 +277,11 @@ fn format_xfs(e: &Entry) -> String {
     }
 }
 
-/// Color-coded permission string, left-padded to `width` visible columns.
+/// Color-coded classic permissions (`drwxr-xr-x`), padded to `width`.
 ///
-/// - type char: same color as the entry name
-/// - `r`: white  ·  `w`: red  ·  `x`: green
-/// - `s`/`S`/`t`/`T`: orange (special bits)
-/// - `-`: dim  ·  `+` ACL: light blue  ·  `@` xattr: orange
+/// - type char: entry color
+/// - `r` white · `w` red · `x` green · `s`/`S`/`t`/`T` orange · `-` dim
+/// - `+` ACL light blue · `@` xattr orange
 fn write_perms(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
     let plain = e.mode_string();
     let type_color = color_for(e);
@@ -288,13 +297,12 @@ fn write_perms(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> 
                 's' | 'S' | 't' | 'T' => ORANGE,
                 '+' => LIGHT_BLUE,
                 '@' => ORANGE,
-                _ => DIM, // '-' and anything else
+                _ => DIM,
             }
         };
         write!(out, "{color}{ch}{RESET}")?;
     }
 
-    // Pad to column width (ANSI-safe: pad after visible chars).
     let pad = width.saturating_sub(plain.chars().count());
     for _ in 0..pad {
         write!(out, " ")?;
@@ -338,7 +346,7 @@ pub fn human_size(n: u64) -> String {
 
 fn fmt_time_short(t: Option<SystemTime>) -> String {
     match t.and_then(system_parts) {
-        Some((_y, mo, d, h, mi, _)) => format!("{mo:02}-{d:02} {h:02}:{mi:02}"),
+        Some((y, mo, d, h, mi, s)) => format!("{d:02}-{mo:02}-{y:04} {h:02}:{mi:02}:{s:02}"),
         None => "—".into(),
     }
 }

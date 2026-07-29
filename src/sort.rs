@@ -1,4 +1,4 @@
-//! Descending sort by listing header field.
+//! Ascending sort by listing header field.
 
 use std::cmp::Ordering;
 use std::time::SystemTime;
@@ -70,18 +70,18 @@ impl SortKey {
     /// 0 = basic stat, 1 = portable extras, 2 = + XFS.
     pub fn min_detail(self) -> u8 {
         match self {
-            Self::Perms | Self::Size | Self::Mtime | Self::Name => 0,
+            Self::Perms | Self::Size | Self::Mtime | Self::Name | Self::User | Self::Group => 0,
             Self::Xfs => 2,
             _ => 1,
         }
     }
 }
 
-/// Sort `entries` by `key` in **descending** order.
+/// Sort `entries` by `key` in **ascending** order.
 /// Ties break on name ascending (case-insensitive).
 pub fn sort_entries(entries: &mut [Entry], key: SortKey) {
     entries.sort_by(|a, b| {
-        cmp_desc(a, b, key).then_with(|| {
+        cmp_asc(a, b, key).then_with(|| {
             a.name
                 .to_ascii_lowercase()
                 .cmp(&b.name.to_ascii_lowercase())
@@ -89,9 +89,8 @@ pub fn sort_entries(entries: &mut [Entry], key: SortKey) {
     });
 }
 
-fn cmp_desc(a: &Entry, b: &Entry, key: SortKey) -> Ordering {
-    // Build ascending ordering, then reverse → descending.
-    let asc = match key {
+fn cmp_asc(a: &Entry, b: &Entry, key: SortKey) -> Ordering {
+    match key {
         SortKey::Perms => a.mode.cmp(&b.mode),
         SortKey::Size => a.size.cmp(&b.size),
         SortKey::Mtime => cmp_time(a.mtime, b.mtime),
@@ -128,8 +127,7 @@ fn cmp_desc(a: &Entry, b: &Entry, key: SortKey) -> Ordering {
             .cmp(&b.extras.xattrs.len())
             .then_with(|| cmp_str_ci(&a.extras.xattrs.join(","), &b.extras.xattrs.join(","))),
         SortKey::Xfs => cmp_xfs(a, b),
-    };
-    asc.reverse()
+    }
 }
 
 fn cmp_str_ci(a: &str, b: &str) -> Ordering {

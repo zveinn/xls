@@ -22,6 +22,7 @@ enum Cli {
         mode: Mode,
         path: PathBuf,
         sort: Option<SortKey>,
+        headers: bool,
     },
 }
 
@@ -32,8 +33,13 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
-        Ok(Cli::List { mode, path, sort }) => {
-            if let Err(e) = run(mode, &path, sort) {
+        Ok(Cli::List {
+            mode,
+            path,
+            sort,
+            headers,
+        }) => {
+            if let Err(e) = run(mode, &path, sort, headers) {
                 eprintln!("{RED}xls: {e}{RESET}");
                 return ExitCode::FAILURE;
             }
@@ -52,6 +58,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut path = None;
     let mut help = false;
     let mut sort = None;
+    let mut headers = true;
     let mut i = 0;
 
     while i < args.len() {
@@ -65,6 +72,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
             "-f" => mode = Mode::Full,
             "-af" | "-fa" => mode = Mode::Full,
             "-h" | "--help" => help = true,
+            "--noHeaders" | "--no-headers" => headers = false,
             "--sort" => {
                 i += 1;
                 let Some(field) = args.get(i) else {
@@ -97,6 +105,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
         mode,
         path: path.unwrap_or_else(|| PathBuf::from(".")),
         sort,
+        headers,
     })
 }
 
@@ -112,29 +121,30 @@ fn print_help() {
 {h}xls{RESET} — colored directory listing
 
 {h}USAGE{RESET}
-  {k}xls{RESET} [{k}-a{RESET}|{k}-f{RESET}] [{k}--sort{RESET} {k}HEADER{RESET}] [{k}path{RESET}]
+  {k}xls{RESET} [{k}-a{RESET}|{k}-f{RESET}] [{k}--sort{RESET} {k}HEADER{RESET}] [{k}--noHeaders{RESET}] [{k}path{RESET}]
   {k}xls{RESET} [{k}-h{RESET}|{k}--help{RESET}]
 
 {h}OPTIONS{RESET}
-  {k}(none){RESET}            Basic listing: permissions, size, mtime, name
+  {k}(none){RESET}            Basic listing: perms, user, group, size, mtime, name
   {k}-a{RESET}                All portable metadata (not filesystem-specific)
   {k}-f{RESET}                Full listing: everything in {k}-a{RESET} plus cheap XFS fields
-  {k}--sort{RESET} {k}HEADER{RESET}     Sort by column header (always descending)
+  {k}--sort{RESET} {k}HEADER{RESET}     Sort by column header (always ascending)
+  {k}--noHeaders{RESET}        Do not print the column header row
   {k}-h{RESET}, {k}--help{RESET}        Show this help and exit
 
 {h}SORTING{RESET}
   Use {k}--sort HEADER{RESET} or {k}--sort=HEADER{RESET}. Names are case-insensitive.
-  Order is always {o}descending{RESET} (largest / newest / Z–A first).
+  Order is always {o}ascending{RESET} (smallest / oldest / A–Z first).
   Ties break on {k}NAME{RESET} ascending.
 
   Sortable headers:
     {k}{fields}{RESET}
 
   Notes:
-    {k}SIZE{RESET}, {k}N{RESET}, {k}BLOCKS{RESET}, {k}INO:IGEN{RESET}, {k}DEV{RESET}  numeric (high → low)
-    {k}MTIME{RESET}, {k}ATIME{RESET}, {k}CTIME{RESET}, {k}BIRTH{RESET}   newest first
-    {k}NAME{RESET}, {k}USER{RESET}, {k}GROUP{RESET}, {k}PERMS{RESET}     reverse lexicographic
-    {k}S{RESET}                               sparse files first
+    {k}SIZE{RESET}, {k}N{RESET}, {k}BLOCKS{RESET}, {k}INO:IGEN{RESET}, {k}DEV{RESET}  numeric (low → high)
+    {k}MTIME{RESET}, {k}ATIME{RESET}, {k}CTIME{RESET}, {k}BIRTH{RESET}   oldest first
+    {k}NAME{RESET}, {k}USER{RESET}, {k}GROUP{RESET}, {k}PERMS{RESET}     lexicographic A–Z
+    {k}S{RESET}                               non-sparse first
     {k}FLAGS{RESET}, {k}XATTRS{RESET}                    by content / count
     {k}XFS{RESET}                              by extent count, then project id
     Aliases: {d}NLINK/LINKS{RESET}→N, {d}INODE{RESET}→INO:IGEN, {d}OWNER{RESET}→USER, …
@@ -151,20 +161,19 @@ fn print_help() {
   {HIDDEN_LINK}pink{RESET}         hidden symlink / special
 
 {h}HEADERS — basic{RESET}  ({k}xls{RESET})
-  {k}PERMS{RESET}   Permission bits and file type (color-coded):
+  {k}PERMS{RESET}   Classic mode string (color-coded), e.g. {d}drwxr-xr-x{RESET}
                     type char matches entry color; {WHITE}r{RESET} read,
                     {RED}w{RESET} write, {GREEN}x{RESET} execute,
                     {ORANGE}s/S/t/T{RESET} setuid/setgid/sticky,
-                    {d}-{RESET} unset; trailing {LIGHT_BLUE}+{RESET} ACL,
-                    {ORANGE}@{RESET} xattrs
+                    {d}-{RESET} unset; trailing {LIGHT_BLUE}+{RESET} ACL, {ORANGE}@{RESET} xattrs
+  {k}USER{RESET}    Owner user name
+  {k}GROUP{RESET}   Owner group name
   {k}SIZE{RESET}    Logical size (human-readable: B/K/M/G/T)
-  {k}MTIME{RESET}   Last content modification time (UTC, MM-DD HH:MM)
+  {k}MTIME{RESET}   Last content modification time (UTC, DD-MM-YYYY HH:MM:SS)
   {k}NAME{RESET}    Entry name (color indicates type); symlinks show {d}->{RESET} target
 
 {h}HEADERS — all{RESET}  ({k}xls -a{RESET}; includes basic columns)
   {k}N{RESET}       Hard link count
-  {k}USER{RESET}    Owner user name
-  {k}GROUP{RESET}   Owner group name
   {k}BLOCKS{RESET}  Allocated blocks and preferred I/O block size
                     format: {d}<st_blocks>b/<blksize>{RESET}
                     ({d}st_blocks{RESET} is in 512-byte units)
@@ -202,7 +211,7 @@ fn print_help() {
     );
 }
 
-fn run(mode: Mode, path: &Path, sort: Option<SortKey>) -> io::Result<()> {
+fn run(mode: Mode, path: &Path, sort: Option<SortKey>, headers: bool) -> io::Result<()> {
     let detail = match mode {
         Mode::Basic => 0,
         Mode::All => 1,
@@ -243,7 +252,9 @@ fn run(mode: Mode, path: &Path, sort: Option<SortKey>) -> io::Result<()> {
 
     let widths = Widths::measure(&entries, mode);
     let mut out = io::stdout().lock();
-    write_header(&mut out, mode, &widths)?;
+    if headers {
+        write_header(&mut out, mode, &widths)?;
+    }
     for e in &entries {
         write_entry(&mut out, e, mode, &widths)?;
     }

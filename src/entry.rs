@@ -80,11 +80,8 @@ impl Entry {
         let rdev = meta.rdev();
         let (rdev_major, rdev_minor) = sys::dev_major_minor(rdev);
 
-        let (user, group) = if detail >= 1 {
-            (sys::user_name(meta.uid()), sys::group_name(meta.gid()))
-        } else {
-            (String::new(), String::new())
-        };
+        let user = sys::user_name(meta.uid());
+        let group = sys::group_name(meta.gid());
 
         let extras = if detail >= 1 {
             sys::linux_extras(&path, detail >= 2)
@@ -119,6 +116,7 @@ impl Entry {
         })
     }
 
+    /// Classic permission string, e.g. `drwxr-xr-x`.
     pub fn mode_string(&self) -> String {
         let mut s = String::with_capacity(10);
         s.push(match self.kind {
