@@ -13,26 +13,30 @@ use std::process::ExitCode;
 use columns::Column;
 use entry::Entry;
 use format::{
-    DIM, GREEN, LIGHT_BLUE, ORANGE, RED, RESET, SOFT_BLUE, WHITE, Widths, is_narrow, write_entry,
-    write_entry_cards, write_header,
+    ColorMode, DIM, GREEN, LIGHT_BLUE, ORANGE, RED, RESET, SOFT_BLUE, WHITE, Widths, init_color,
+    is_narrow, write_entry, write_entry_cards, write_header,
 };
 use sort::sort_entries;
 
 enum Cli {
-    Help,
+    Help {
+        color: ColorMode,
+    },
     List {
         path: PathBuf,
         columns: Vec<Column>,
         sort: Option<Column>,
         headers: bool,
         table: bool,
+        color: ColorMode,
     },
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     match parse_args(&args) {
-        Ok(Cli::Help) => {
+        Ok(Cli::Help { color }) => {
+            init_color(color);
             print_help();
             ExitCode::SUCCESS
         }
@@ -42,7 +46,9 @@ fn main() -> ExitCode {
             sort,
             headers,
             table,
+            color,
         }) => {
+            init_color(color);
             if let Err(e) = run(&path, &columns, sort, headers, table) {
                 eprintln!("{RED}xls: {e}{RESET}");
                 return ExitCode::FAILURE;
@@ -50,10 +56,23 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(msg) => {
+            // Best-effort color for errors (auto).
+            init_color(ColorMode::Auto);
             eprintln!("{RED}xls: {msg}{RESET}");
             eprintln!("Try '{WHITE}xls --help{RESET}' for more information.");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn parse_color_mode(s: &str) -> Result<ColorMode, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "auto" => Ok(ColorMode::Auto),
+        "always" | "on" | "yes" | "true" | "1" => Ok(ColorMode::Always),
+        "never" | "off" | "no" | "false" | "0" => Ok(ColorMode::Never),
+        other => Err(format!(
+            "invalid --color value '{other}' (use auto, always, or never)"
+        )),
     }
 }
 
@@ -65,6 +84,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut table = true;
     let mut columns = None;
     let mut all = false;
+    let mut color = ColorMode::Auto;
     let mut i = 0;
 
     while i < args.len() {
@@ -74,6 +94,22 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
             "--noHeaders" | "--no-headers" => headers = false,
             "--noTable" | "--no-table" => table = false,
             "--all" => all = true,
+            "--color" => {
+                // GNU ls style: bare `--color` => always; or take next token as mode.
+                if let Some(v) = args.get(i + 1) {
+                    if let Ok(mode) = parse_color_mode(v) {
+                        color = mode;
+                        i += 1;
+                    } else {
+                        color = ColorMode::Always;
+                    }
+                } else {
+                    color = ColorMode::Always;
+                }
+            }
+            s if let Some(v) = s.strip_prefix("--color=") => {
+                color = parse_color_mode(v)?;
+            }
             "--columns" => {
                 i += 1;
                 let Some(list) = args.get(i) else {
@@ -118,7 +154,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     }
 
     if help {
-        return Ok(Cli::Help);
+        return Ok(Cli::Help { color });
     }
 
     if all && columns.is_some() {
@@ -137,6 +173,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
         sort,
         headers,
         table,
+        color,
     })
 }
 
@@ -157,7 +194,7 @@ fn print_help() {
 {h}xls{RESET} — colored directory listing
 
 {h}USAGE{RESET}
-  {k}xls{RESET} [{k}--all{RESET}|{k}--columns{RESET} {k}COLS{RESET}] [{k}--sort{RESET} {k}COL{RESET}] [{k}--noHeaders{RESET}] [{k}path{RESET}]
+  {k}xls{RESET} [{k}--all{RESET}|{k}--columns{RESET} {k}COLS{RESET}] [{k}--sort{RESET} {k}COL{RESET}] [{k}--color{RESET} {k}WHEN{RESET}] [{k}path{RESET}]
   {k}xls{RESET} [{k}-h{RESET}|{k}--help{RESET}]
 
 {h}OPTIONS{RESET}
@@ -166,7 +203,13 @@ fn print_help() {
   {k}--sort{RESET} {k}COL{RESET}       Sort by column (always ascending)
   {k}--noHeaders{RESET}      Do not print the column header row
   {k}--noTable{RESET}        Skip table frame (no {d}│{RESET} / {d}─┼─{RESET} rules)
+  {k}--color{RESET} {k}WHEN{RESET}     When to use colors: {k}auto{RESET} (default), {k}always{RESET}, {k}never{RESET}
   {k}-h{RESET}, {k}--help{RESET}      Show this help and exit
+
+  Color is disabled automatically when stdout is not a terminal (e.g. pipes
+  to {k}less{RESET}, files). Also respects {k}NO_COLOR{RESET}, {k}CLICOLOR=0{RESET},
+  and {k}CLICOLOR_FORCE{RESET}/{k}FORCE_COLOR{RESET}. Use {k}--color=always{RESET}
+  with {k}less -R{RESET} to keep colors in a pager.
 
   When the listing is wider than the terminal, each file is shown as a
   bordered card (rounded box, title, labeled fields). Multiple cards are
@@ -290,6 +333,8 @@ fn run(
     let narrow = is_narrow(row_w);
 
     let mut out = io::stdout().lock();
+    // Blank line so the listing separates cleanly from the shell prompt.
+    writeln!(out)?;
     if narrow {
         // Card grid: packs as many cards as fit per row.
         write_entry_cards(&mut out, &entries, columns, headers)?;

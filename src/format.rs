@@ -8,33 +8,106 @@
 //! - sparse as a filled/empty diamond
 //! - size with a slightly brighter number, quieter unit
 
-use std::io::{self, Write};
+use std::fmt;
+use std::io::{self, IsTerminal, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::columns::Column;
 use crate::entry::{Entry, Kind};
 
-pub const WHITE: &str = "\x1b[97m";
-pub const BOLD_WHITE: &str = "\x1b[1;97m";
-pub const LIGHT_BLUE: &str = "\x1b[38;5;117m";
-pub const GREEN: &str = "\x1b[92m";
-pub const RED: &str = "\x1b[91m";
-pub const ORANGE: &str = "\x1b[38;5;214m";
-pub const DIM: &str = "\x1b[90m";
-pub const SOFT: &str = "\x1b[38;5;247m";
-pub const SOFT_BLUE: &str = "\x1b[38;5;111m";
-pub const RESET: &str = "\x1b[0m";
+/// Whether ANSI colors are emitted (auto / always / never).
+static COLOR_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Dim column separator between fields (table mode).
-const SEP_TABLE: &str = "\x1b[90m │ \x1b[0m";
-/// Plain spacing when the table frame is off.
-const SEP_PLAIN: &str = "  ";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorMode {
+    /// Color only when stdout is a TTY (default). Respects `NO_COLOR`.
+    Auto,
+    Always,
+    Never,
+}
+
+/// Configure color output. Call once at startup before printing.
+pub fn init_color(mode: ColorMode) {
+    let on = match mode {
+        ColorMode::Always => true,
+        ColorMode::Never => false,
+        ColorMode::Auto => {
+            // https://no-color.org/ — any value disables.
+            if std::env::var_os("NO_COLOR").is_some() {
+                false
+            } else if force_color_env() {
+                true
+            } else if std::env::var("CLICOLOR").ok().as_deref() == Some("0") {
+                false
+            } else {
+                io::stdout().is_terminal()
+            }
+        }
+    };
+    COLOR_ENABLED.store(on, Ordering::Relaxed);
+}
+
+fn force_color_env() -> bool {
+    // Common force flags used by CI / tooling.
+    matches!(
+        std::env::var("CLICOLOR_FORCE").ok().as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    ) || matches!(
+        std::env::var("FORCE_COLOR").ok().as_deref(),
+        Some(v) if v != "0"
+    )
+}
+
+pub fn color_enabled() -> bool {
+    COLOR_ENABLED.load(Ordering::Relaxed)
+}
+
+/// ANSI SGR code that becomes a no-op when colors are disabled.
+#[derive(Clone, Copy)]
+pub struct Ansi(pub &'static str);
+
+impl fmt::Display for Ansi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if color_enabled() {
+            f.write_str(self.0)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Ansi {
+    /// Raw escape (or empty) for string building.
+    pub fn as_str(self) -> &'static str {
+        if color_enabled() {
+            self.0
+        } else {
+            ""
+        }
+    }
+}
+
+pub const WHITE: Ansi = Ansi("\x1b[97m");
+pub const BOLD_WHITE: Ansi = Ansi("\x1b[1;97m");
+pub const LIGHT_BLUE: Ansi = Ansi("\x1b[38;5;117m");
+pub const GREEN: Ansi = Ansi("\x1b[92m");
+pub const RED: Ansi = Ansi("\x1b[91m");
+pub const ORANGE: Ansi = Ansi("\x1b[38;5;214m");
+pub const DIM: Ansi = Ansi("\x1b[90m");
+pub const SOFT: Ansi = Ansi("\x1b[38;5;247m");
+pub const SOFT_BLUE: Ansi = Ansi("\x1b[38;5;111m");
+pub const RESET: Ansi = Ansi("\x1b[0m");
 
 fn sep(table: bool) -> &'static str {
     if table {
-        SEP_TABLE
+        if color_enabled() {
+            "\x1b[90m │ \x1b[0m"
+        } else {
+            " │ "
+        }
     } else {
-        SEP_PLAIN
+        "  "
     }
 }
 
@@ -171,7 +244,7 @@ pub fn is_narrow(row_width: usize) -> bool {
     }
 }
 
-pub fn color_for(e: &Entry) -> &'static str {
+pub fn color_for(e: &Entry) -> Ansi {
     if e.broken_symlink {
         return RED;
     }
@@ -586,7 +659,7 @@ fn wrap_ansi(s: &str, width: usize) -> Vec<String> {
         if cur_vis + 1 > width {
             if let Some((snap, _, sgr_at_break, next_i)) = good_break.take() {
                 let mut line = snap;
-                line.push_str(RESET);
+                line.push_str(RESET.as_str());
                 lines.push(line);
                 cur.clear();
                 cur_vis = 0;
@@ -600,7 +673,7 @@ fn wrap_ansi(s: &str, width: usize) -> Vec<String> {
             // Hard wrap: flush what we have, then place current char on next line.
             if cur_vis > 0 {
                 let mut line = std::mem::take(&mut cur);
-                line.push_str(RESET);
+                line.push_str(RESET.as_str());
                 lines.push(line);
                 cur_vis = 0;
                 if !active_sgr.is_empty() {
@@ -622,7 +695,7 @@ fn wrap_ansi(s: &str, width: usize) -> Vec<String> {
 
     if cur_vis > 0 || lines.is_empty() {
         if cur_vis > 0 {
-            cur.push_str(RESET);
+            cur.push_str(RESET.as_str());
         }
         lines.push(cur);
     }
@@ -710,7 +783,7 @@ fn visible_width(s: &str) -> usize {
 /// Best-effort visible truncate; always ends with RESET so colors don't leak.
 fn truncate_ansi(s: &str, max_vis: usize) -> String {
     if max_vis == 0 {
-        return RESET.to_string();
+        return RESET.as_str().to_string();
     }
     let mut out = String::new();
     let mut n = 0;
@@ -735,7 +808,7 @@ fn truncate_ansi(s: &str, max_vis: usize) -> String {
         out.push(ch);
         n += 1;
     }
-    out.push_str(RESET);
+    out.push_str(RESET.as_str());
     out
 }
 

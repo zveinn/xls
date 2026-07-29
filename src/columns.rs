@@ -30,13 +30,7 @@ pub enum Column {
 impl Column {
     /// Default column set.
     pub fn defaults() -> Vec<Self> {
-        vec![
-            Self::Mtime,
-            Self::User,
-            Self::Perms,
-            Self::Size,
-            Self::Name,
-        ]
+        vec![Self::User, Self::Perms, Self::Size, Self::Name]
     }
 
     /// Every column, in a sensible display order.
