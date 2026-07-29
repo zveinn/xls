@@ -13,6 +13,8 @@ pub enum Column {
     /// Other permission triad (+ ACL/xattr markers).
     Other,
     Size,
+    /// File type letter: `d`, `-`, `l`, `p`, `s`, `b`, `c`.
+    Type,
     Name,
     Nlink,
     Blocks,
@@ -36,6 +38,7 @@ impl Column {
             Self::Group,
             Self::Other,
             Self::Size,
+            Self::Type,
             Self::Name,
         ]
     }
@@ -59,6 +62,7 @@ impl Column {
             Self::Flags,
             Self::Xattrs,
             Self::Xfs,
+            Self::Type,
             Self::Name,
         ]
     }
@@ -71,6 +75,7 @@ impl Column {
             Self::Group => "GROUP",
             Self::Other => "OTHER",
             Self::Size => "SIZE",
+            Self::Type => "TYPE",
             Self::Name => "NAME",
             Self::Nlink => "N",
             Self::Blocks => "BLOCKS",
@@ -89,8 +94,8 @@ impl Column {
     /// All column names for help / errors.
     pub fn names() -> &'static [&'static str] {
         &[
-            "MTIME", "USER", "GROUP", "OTHER", "SIZE", "NAME", "N", "BLOCKS", "S", "INO:IGEN",
-            "DEV", "ATIME", "CTIME", "BIRTH", "FLAGS", "XATTRS", "XFS", "PERMS",
+            "MTIME", "USER", "GROUP", "OTHER", "SIZE", "TYPE", "NAME", "N", "BLOCKS", "S",
+            "INO:IGEN", "DEV", "ATIME", "CTIME", "BIRTH", "FLAGS", "XATTRS", "XFS", "PERMS",
         ]
     }
 
@@ -103,6 +108,7 @@ impl Column {
             "GROUP" | "GID" => Ok(Self::Group),
             "OTHER" | "OTH" | "WORLD" => Ok(Self::Other),
             "SIZE" => Ok(Self::Size),
+            "TYPE" | "T" | "KIND" => Ok(Self::Type),
             "NAME" => Ok(Self::Name),
             "N" | "NLINK" | "LINKS" => Ok(Self::Nlink),
             "BLOCKS" | "ALLOC" => Ok(Self::Blocks),
@@ -146,6 +152,7 @@ impl Column {
             | Self::Group
             | Self::Other
             | Self::Size
+            | Self::Type
             | Self::Name
             | Self::Nlink
             | Self::Blocks

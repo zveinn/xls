@@ -23,6 +23,7 @@ fn cmp_asc(a: &Entry, b: &Entry, key: Column) -> Ordering {
         Column::Perms => a.mode.cmp(&b.mode),
         Column::Size => a.size.cmp(&b.size),
         Column::Mtime => cmp_time(a.mtime, b.mtime),
+        Column::Type => (a.kind as u8).cmp(&(b.kind as u8)),
         Column::Name => a
             .name
             .to_ascii_lowercase()

@@ -47,7 +47,8 @@ pub struct Widths {
     flags: usize,
     xattrs: usize,
     xfs: usize,
-    name: usize, // glyph + space + name
+    ty: usize,
+    name: usize,
 }
 
 impl Widths {
@@ -72,6 +73,7 @@ impl Widths {
                 Column::Xattrs => w.xattrs = w.xattrs.max("XATTRS".len()),
                 Column::Xfs => w.xfs = w.xfs.max("XFS".len()),
                 Column::Name => w.name = w.name.max("NAME".len()),
+                Column::Type => w.ty = w.ty.max("TYPE".len()),
                 Column::Mtime
                 | Column::Atime
                 | Column::Ctime
@@ -103,8 +105,9 @@ impl Widths {
                         w.xattrs = w.xattrs.max(format_list_field_owned(&e.extras.xattrs).len())
                     }
                     Column::Xfs => w.xfs = w.xfs.max(format_xfs(e).len()),
+                    Column::Type => w.ty = w.ty.max(type_word(e).len()),
                     Column::Name => {
-                        w.name = w.name.max(2 + e.name.chars().count());
+                        w.name = w.name.max(e.name.chars().count());
                     }
                     _ => {}
                 }
@@ -129,6 +132,7 @@ impl Widths {
             Column::Xfs => self.xfs,
             Column::Mtime | Column::Atime | Column::Ctime | Column::Birth => self.time,
             Column::Sparse => 1,
+            Column::Type => self.ty,
             Column::Name => self.name,
         }
     }
@@ -153,19 +157,21 @@ pub fn color_for(e: &Entry) -> &'static str {
     }
 }
 
-/// Type glyph shown beside the name (and used as a quick scan cue).
-fn type_glyph(e: &Entry) -> char {
+/// Full type word for the TYPE column.
+fn type_word(e: &Entry) -> &'static str {
     if e.broken_symlink {
-        return '!';
+        return "broken";
     }
     match e.kind {
-        Kind::Dir => '▸',
-        Kind::Symlink => '↗',
-        Kind::File if e.executable => '›',
-        Kind::Fifo => '┊',
-        Kind::Socket => '◌',
-        Kind::Block | Kind::Char => '▣',
-        Kind::File | Kind::Unknown => '·',
+        Kind::Dir => "dir",
+        Kind::Symlink => "link",
+        Kind::Fifo => "fifo",
+        Kind::Socket => "sock",
+        Kind::Block => "block",
+        Kind::Char => "char",
+        Kind::File if e.executable => "exec",
+        Kind::File => "file",
+        Kind::Unknown => "unknown",
     }
 }
 
@@ -176,10 +182,7 @@ pub fn write_header(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Re
         }
         let label = c.header();
         let width = w.width_for(*c);
-        // NAME header accounts for glyph column.
-        if *c == Column::Name {
-            write!(out, "{BOLD_WHITE}{label:<width$}{RESET}", width = width.max(label.len()))?;
-        } else if matches!(c, Column::Size | Column::Nlink) {
+        if matches!(c, Column::Size | Column::Nlink) {
             write!(out, "{BOLD_WHITE}{label:>width$}{RESET}")?;
         } else if width == 0 {
             write!(out, "{BOLD_WHITE}{label}{RESET}")?;
@@ -188,7 +191,6 @@ pub fn write_header(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Re
         }
     }
     writeln!(out)?;
-    // Subtle rule under the header for a card-like scan line.
     write_header_rule(out, cols, w)
 }
 
@@ -232,6 +234,7 @@ fn write_column(out: &mut impl Write, e: &Entry, c: Column, w: &Widths) -> io::R
         Column::Group => write_owner_col(out, &triad_group(e), &e.group, w.group),
         Column::Other => write_other_col(out, e, w.other),
         Column::Size => write_size(out, e.size, w.size),
+        Column::Type => write_type(out, e, w.width_for(Column::Type)),
         Column::Name => write_name(out, e, w.name),
         Column::Nlink => write!(
             out,
@@ -444,17 +447,21 @@ fn bits_to_triad(
     s
 }
 
+fn write_type(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
+    let color = color_for(e);
+    let word = type_word(e);
+    write!(out, "{color}{word:<width$}{RESET}")
+}
+
 fn write_name(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
     let color = color_for(e);
-    let glyph = type_glyph(e);
-    write!(out, "{color}{glyph}{RESET} {color}{name}{RESET}", name = e.name)?;
+    write!(out, "{color}{name}{RESET}", name = e.name)?;
 
-    let mut used = 2 + e.name.chars().count();
+    let mut used = e.name.chars().count();
     if let Some(target) = &e.symlink {
         let tc = if e.broken_symlink { RED } else { ORANGE };
         write!(out, " {DIM}→{RESET} {tc}{target}{RESET}")?;
-        // Don't force-pad long symlink targets into the column width.
-        used = width; // skip trailing pad
+        used = width; // skip trailing pad for long targets
     }
     pad(out, width.saturating_sub(used))
 }

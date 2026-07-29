@@ -167,7 +167,7 @@ fn print_help() {
     {k}{defaults}{RESET}
 
   {k}--all{RESET} order:
-    {k}MTIME,N,USER,GROUP,OTHER,SIZE,BLOCKS,S,INO:IGEN,DEV,ATIME,CTIME,BIRTH,FLAGS,XATTRS,XFS,NAME{RESET}
+    {k}MTIME,N,USER,GROUP,OTHER,SIZE,BLOCKS,S,INO:IGEN,DEV,ATIME,CTIME,BIRTH,FLAGS,XATTRS,XFS,TYPE,NAME{RESET}
 
   Available:
     {k}{fields}{RESET}
@@ -175,7 +175,7 @@ fn print_help() {
   Examples:
     {k}xls --all{RESET}
     {k}xls --columns NAME,SIZE{RESET}
-    {k}xls --columns=MTIME,USER,GROUP,OTHER,SIZE,NAME{RESET}
+    {k}xls --columns=MTIME,USER,GROUP,OTHER,SIZE,TYPE,NAME{RESET}
     {k}xls --columns MTIME,NAME,XFS --sort SIZE{RESET}
 
 {h}SORTING{RESET}
@@ -210,8 +210,9 @@ fn print_help() {
   {k}OTHER{RESET}     Other triad (+ {d}+{RESET} ACL / {d}@{RESET} xattr), e.g. {d}r-x{RESET}
   {k}PERMS{RESET}     Optional classic full mode string ({d}d rwx·r-x·r-x{RESET})
   {k}SIZE{RESET}      Logical size (human-readable: B/K/M/G/T)
-  {k}NAME{RESET}      Glyph + name ({d}▸{RESET} dir, {d}·{RESET} file, {d}›{RESET} exec,
-                    {d}↗{RESET} link); symlinks show {d}→{RESET} target
+  {k}TYPE{RESET}      File kind: {d}dir{RESET}, {d}file{RESET}, {d}exec{RESET}, {d}link{RESET},
+                    {d}fifo{RESET}, {d}sock{RESET}, {d}block{RESET}, {d}char{RESET}, {d}broken{RESET}
+  {k}NAME{RESET}      Entry name (color indicates type); symlinks show {d}→{RESET} target
   {k}N{RESET}         Hard link count
   {k}BLOCKS{RESET}    Allocated blocks and I/O block size ({d}<st_blocks>b/<blksize>{RESET})
   {k}S{RESET}         Sparse: {ORANGE}◆{RESET} sparse, {d}◇{RESET} not
