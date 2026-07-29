@@ -14,7 +14,7 @@ use columns::Column;
 use entry::Entry;
 use format::{
     DIM, GREEN, HIDDEN_DIR, HIDDEN_EXEC, HIDDEN_FILE, HIDDEN_LINK, LIGHT_BLUE, ORANGE, RED, RESET,
-    WHITE, Widths, write_entry, write_header,
+    WHITE, Widths, is_narrow, write_entry, write_entry_card, write_header,
 };
 use sort::sort_entries;
 
@@ -168,6 +168,10 @@ fn print_help() {
   {k}--noTable{RESET}        Skip table frame (no {d}│{RESET} / {d}─┼─{RESET} rules)
   {k}-h{RESET}, {k}--help{RESET}      Show this help and exit
 
+  When the listing is wider than the terminal, each file is shown as a
+  vertical card (name as title, labeled fields underneath) instead of a
+  table row.
+
 {h}COLUMNS{RESET}
   Default ({k}--columns{RESET} / {k}--all{RESET} omitted):
     {k}{defaults}{RESET}
@@ -286,12 +290,22 @@ fn run(
     }
 
     let widths = Widths::measure(&entries, columns);
+    let row_w = widths.row_width(columns, table);
+    let narrow = is_narrow(row_w);
+
     let mut out = io::stdout().lock();
-    if headers {
-        write_header(&mut out, columns, &widths, table)?;
-    }
-    for e in &entries {
-        write_entry(&mut out, e, columns, &widths, table)?;
+    if narrow {
+        // Card layout: no table header; optional per-field labels.
+        for e in &entries {
+            write_entry_card(&mut out, e, columns, headers)?;
+        }
+    } else {
+        if headers {
+            write_header(&mut out, columns, &widths, table)?;
+        }
+        for e in &entries {
+            write_entry(&mut out, e, columns, &widths, table)?;
+        }
     }
     out.flush()
 }

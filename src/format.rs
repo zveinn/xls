@@ -146,6 +146,43 @@ impl Widths {
             Column::Name => self.name,
         }
     }
+
+    /// Visible width of one full row (columns + separators).
+    pub fn row_width(&self, cols: &[Column], table: bool) -> usize {
+        if cols.is_empty() {
+            return 0;
+        }
+        let sep_w = if table { 3 } else { 2 }; // " │ " or "  "
+        let cols_w: usize = cols.iter().map(|c| self.width_for(*c)).sum();
+        cols_w + sep_w * cols.len().saturating_sub(1)
+    }
+}
+
+/// Terminal width in columns, if available.
+pub fn terminal_width() -> Option<usize> {
+    if let Ok(c) = std::env::var("COLUMNS") {
+        if let Ok(n) = c.parse::<usize>() {
+            if n > 0 {
+                return Some(n);
+            }
+        }
+    }
+    // Safety: TIOCGWINSZ on stdout; fails when not a tty.
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
+            return Some(ws.ws_col as usize);
+        }
+    }
+    None
+}
+
+/// True when a single table row would exceed the terminal width.
+pub fn is_narrow(row_width: usize) -> bool {
+    match terminal_width() {
+        Some(tw) if tw > 0 => row_width > tw,
+        _ => false,
+    }
 }
 
 pub fn color_for(e: &Entry) -> &'static str {
@@ -226,6 +263,7 @@ fn write_header_rule(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::R
     writeln!(out)
 }
 
+/// Wide-terminal: single table row.
 pub fn write_entry(
     out: &mut impl Write,
     e: &Entry,
@@ -237,61 +275,139 @@ pub fn write_entry(
         if i > 0 {
             write!(out, "{}", sep(table))?;
         }
-        write_column(out, e, *c, w)?;
+        write_column(out, e, *c, w, false)?;
     }
     writeln!(out)
 }
 
-fn write_column(out: &mut impl Write, e: &Entry, c: Column, w: &Widths) -> io::Result<()> {
+/// Narrow-terminal card layout:
+/// ```text
+/// Cargo.toml
+///   TYPE   file
+///   SIZE   87B
+///   USER   sveinn [rw-]
+/// ```
+pub fn write_entry_card(
+    out: &mut impl Write,
+    e: &Entry,
+    cols: &[Column],
+    show_labels: bool,
+) -> io::Result<()> {
+    let dummy = Widths::default();
+    let meta: Vec<Column> = cols.iter().copied().filter(|c| *c != Column::Name).collect();
+    let label_w = meta
+        .iter()
+        .map(|c| c.header().len())
+        .max()
+        .unwrap_or(0);
+
+    // Title: NAME if requested, otherwise a neutral bullet.
+    if cols.contains(&Column::Name) {
+        let color = color_for(e);
+        write!(out, "{color}{name}{RESET}", name = e.name)?;
+        if let Some(target) = &e.symlink {
+            let tc = if e.broken_symlink { RED } else { ORANGE };
+            write!(out, " {DIM}→{RESET} {tc}{target}{RESET}")?;
+        }
+        writeln!(out)?;
+    }
+
+    for c in &meta {
+        write!(out, "  ")?;
+        if show_labels {
+            write!(
+                out,
+                "{DIM}{label:<label_w$}{RESET}  ",
+                label = c.header(),
+            )?;
+        }
+        write_column(out, e, *c, &dummy, true)?;
+        writeln!(out)?;
+    }
+
+    // Breathing room between cards.
+    writeln!(out)
+}
+
+fn write_column(
+    out: &mut impl Write,
+    e: &Entry,
+    c: Column,
+    widths: &Widths,
+    compact: bool,
+) -> io::Result<()> {
+    // compact = natural width (card mode); else pad to measured column width.
+    let col_w = |measured: usize| -> usize {
+        if compact {
+            0
+        } else {
+            measured
+        }
+    };
+
     match c {
-        Column::Mtime => write_time(out, e.mtime, w.time),
-        Column::Atime => write_time(out, e.atime, w.time),
-        Column::Ctime => write_time(
-            out,
-            epoch_to_system(e.ctime_secs),
-            w.time,
-        ),
-        Column::Birth => write_time(out, e.birth, w.time),
-        Column::Perms => write_perms(out, e, w.perms),
-        Column::User => write_owner_col(out, &triad_user(e), &e.user, w.user),
-        Column::Group => write_owner_col(out, &triad_group(e), &e.group, w.group),
-        Column::Other => write_other_col(out, e, w.other),
-        Column::Size => write_size(out, e.size, w.size),
-        Column::Type => write_type(out, e, w.width_for(Column::Type)),
-        Column::Name => write_name(out, e, w.name),
-        Column::Nlink => write!(
-            out,
-            "{SOFT}{v:>width$}{RESET}",
-            v = e.nlink,
-            width = w.nlink
-        ),
-        Column::Blocks => write!(
-            out,
-            "{DIM}{v:<width$}{RESET}",
-            v = format_blocks(e),
-            width = w.blocks
-        ),
+        Column::Mtime => write_time(out, e.mtime, col_w(widths.time)),
+        Column::Atime => write_time(out, e.atime, col_w(widths.time)),
+        Column::Ctime => write_time(out, epoch_to_system(e.ctime_secs), col_w(widths.time)),
+        Column::Birth => write_time(out, e.birth, col_w(widths.time)),
+        Column::Perms => write_perms(out, e, col_w(widths.perms)),
+        Column::User => write_owner_col(out, &triad_user(e), &e.user, col_w(widths.user)),
+        Column::Group => write_owner_col(out, &triad_group(e), &e.group, col_w(widths.group)),
+        Column::Other => write_other_col(out, e, col_w(widths.other)),
+        Column::Size => write_size(out, e.size, col_w(widths.size)),
+        Column::Type => write_type(out, e, col_w(widths.ty)),
+        Column::Name => write_name(out, e, col_w(widths.name)),
+        Column::Nlink => {
+            if compact {
+                write!(out, "{SOFT}{}{RESET}", e.nlink)
+            } else {
+                write!(
+                    out,
+                    "{SOFT}{v:>width$}{RESET}",
+                    v = e.nlink,
+                    width = widths.nlink
+                )
+            }
+        }
+        Column::Blocks => {
+            let v = format_blocks(e);
+            if compact {
+                write!(out, "{DIM}{v}{RESET}")
+            } else {
+                write!(out, "{DIM}{v:<width$}{RESET}", width = widths.blocks)
+            }
+        }
         Column::Sparse => {
-            if e.sparse {
+            if compact {
+                if e.sparse {
+                    write!(out, "{ORANGE}yes{RESET}")
+                } else {
+                    write!(out, "{DIM}no{RESET}")
+                }
+            } else if e.sparse {
                 write!(out, "{ORANGE}◆{RESET}")
             } else {
                 write!(out, "{DIM}◇{RESET}")
             }
         }
-        Column::Ino => write_ino(out, e, w.ino),
-        Column::Dev => write!(
-            out,
-            "{DIM}{v:<width$}{RESET}",
-            v = format_dev(e),
-            width = w.dev
-        ),
-        Column::Flags => write_badge(out, &format_list_field(&e.extras.flags), w.flags),
+        Column::Ino => write_ino(out, e, col_w(widths.ino)),
+        Column::Dev => {
+            let v = format_dev(e);
+            if compact {
+                write!(out, "{DIM}{v}{RESET}")
+            } else {
+                write!(out, "{DIM}{v:<width$}{RESET}", width = widths.dev)
+            }
+        }
+        Column::Flags => {
+            write_badge(out, &format_list_field(&e.extras.flags), col_w(widths.flags))
+        }
         Column::Xattrs => write_badge(
             out,
             &format_list_field_owned(&e.extras.xattrs),
-            w.xattrs,
+            col_w(widths.xattrs),
         ),
-        Column::Xfs => write_badge(out, &format_xfs(e), w.xfs),
+        Column::Xfs => write_badge(out, &format_xfs(e), col_w(widths.xfs)),
     }
 }
 
