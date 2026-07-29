@@ -23,17 +23,13 @@ fn cmp_asc(a: &Entry, b: &Entry, key: Column) -> Ordering {
         Column::Perms => a.mode.cmp(&b.mode),
         Column::Size => a.size.cmp(&b.size),
         Column::Mtime => cmp_time(a.mtime, b.mtime),
-        Column::Type => (a.kind as u8).cmp(&(b.kind as u8)),
         Column::Name => a
             .name
             .to_ascii_lowercase()
             .cmp(&b.name.to_ascii_lowercase()),
         Column::Nlink => a.nlink.cmp(&b.nlink),
-        // Identity first, then that class's permission bits.
-        Column::User => cmp_str_ci(&a.user, &b.user)
-            .then_with(|| (a.mode & 0o700).cmp(&(b.mode & 0o700))),
-        Column::Group => cmp_str_ci(&a.group, &b.group)
-            .then_with(|| (a.mode & 0o070).cmp(&(b.mode & 0o070))),
+        Column::User => cmp_str_ci(&a.user, &b.user).then_with(|| cmp_str_ci(&a.group, &b.group)),
+        Column::Group => cmp_str_ci(&a.group, &b.group),
         Column::Other => (a.mode & 0o1007).cmp(&(b.mode & 0o1007)), // other + sticky
         Column::Blocks => a
             .blocks

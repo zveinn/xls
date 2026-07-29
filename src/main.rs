@@ -13,8 +13,8 @@ use std::process::ExitCode;
 use columns::Column;
 use entry::Entry;
 use format::{
-    DIM, GREEN, HIDDEN_DIR, HIDDEN_EXEC, HIDDEN_FILE, HIDDEN_LINK, LIGHT_BLUE, ORANGE, RED, RESET,
-    WHITE, Widths, is_narrow, write_entry, write_entry_card, write_header,
+    DIM, GREEN, LIGHT_BLUE, ORANGE, RED, RESET, SOFT_BLUE, WHITE, Widths, is_narrow, write_entry,
+    write_entry_cards, write_header,
 };
 use sort::sort_entries;
 
@@ -169,15 +169,15 @@ fn print_help() {
   {k}-h{RESET}, {k}--help{RESET}      Show this help and exit
 
   When the listing is wider than the terminal, each file is shown as a
-  vertical card (name as title, labeled fields underneath) instead of a
-  table row.
+  bordered card (rounded box, title, labeled fields). Multiple cards are
+  placed per row when horizontal space allows.
 
 {h}COLUMNS{RESET}
   Default ({k}--columns{RESET} / {k}--all{RESET} omitted):
     {k}{defaults}{RESET}
 
   {k}--all{RESET} order:
-    {k}MTIME,N,USER,GROUP,OTHER,SIZE,BLOCKS,S,INO:IGEN,DEV,ATIME,CTIME,BIRTH,FLAGS,XATTRS,XFS,TYPE,NAME{RESET}
+    {k}MTIME,N,USER,PERMS,GROUP,OTHER,SIZE,BLOCKS,S,INO:IGEN,DEV,ATIME,CTIME,BIRTH,FLAGS,XATTRS,XFS,NAME{RESET}
 
   Available:
     {k}{fields}{RESET}
@@ -185,7 +185,7 @@ fn print_help() {
   Examples:
     {k}xls --all{RESET}
     {k}xls --columns NAME,SIZE{RESET}
-    {k}xls --columns=MTIME,USER,GROUP,OTHER,SIZE,TYPE,NAME{RESET}
+    {k}xls --columns=MTIME,USER,PERMS,SIZE,NAME{RESET}
     {k}xls --columns MTIME,NAME,XFS --sort SIZE{RESET}
 
 {h}SORTING{RESET}
@@ -203,25 +203,21 @@ fn print_help() {
 
 {h}COLORS{RESET}
   {WHITE}white{RESET}        regular file
-  {LIGHT_BLUE}light blue{RESET}   directory
+  {SOFT_BLUE}soft blue{RESET}     directory (same as USER)
   {WHITE}bold white{RESET}    column headers
   {GREEN}green{RESET}        executable
   {o}orange{RESET}       symlink / special file
   {RED}red{RESET}          error or broken symlink
-  {HIDDEN_FILE}cyan{RESET}         hidden file ({d}.name{RESET})
-  {HIDDEN_DIR}violet{RESET}       hidden directory ({d}.dir{RESET})
-  {HIDDEN_EXEC}yellow{RESET}       hidden executable
-  {HIDDEN_LINK}pink{RESET}         hidden symlink / special
 
 {h}COLUMN REFERENCE{RESET}
   {k}MTIME{RESET}     Last content modification time (UTC, DD-MM-YYYY HH:MM:SS)
-  {k}USER{RESET}      Owner name + triad, e.g. {d}sveinn [rwx]{RESET}
-  {k}GROUP{RESET}     Group name + triad, e.g. {d}sveinn [r-x]{RESET}
-  {k}OTHER{RESET}     Other triad in brackets (+ {d}+{RESET} ACL / {d}@{RESET} xattr), e.g. {d}[r-x]{RESET}
-  {k}PERMS{RESET}     Optional classic full mode string ({d}d rwx·r-x·r-x{RESET})
+  {k}USER{RESET}      Owner identity: {d}sveinn{RESET}, or {d}sveinn/staff{RESET}
+                    when group name differs
+  {k}PERMS{RESET}     Triads + type: {d}[rwx][r-x][r-x] dir{RESET}
+                    (user · group · other · type; {d}+{RESET}/{d}@{RESET} ACL/xattr)
+  {k}GROUP{RESET}     Group name only (optional detail column)
+  {k}OTHER{RESET}     Other triad only, e.g. {d}[r-x]{RESET} (optional)
   {k}SIZE{RESET}      Logical size (human-readable: B/K/M/G/T)
-  {k}TYPE{RESET}      File kind: {d}dir{RESET}, {d}file{RESET}, {d}exec{RESET}, {d}link{RESET},
-                    {d}fifo{RESET}, {d}sock{RESET}, {d}block{RESET}, {d}char{RESET}, {d}broken{RESET}
   {k}NAME{RESET}      Entry name (color indicates type); symlinks show {d}→{RESET} target
   {k}N{RESET}         Hard link count
   {k}BLOCKS{RESET}    Allocated blocks and I/O block size ({d}<st_blocks>b/<blksize>{RESET})
@@ -295,10 +291,8 @@ fn run(
 
     let mut out = io::stdout().lock();
     if narrow {
-        // Card layout: no table header; optional per-field labels.
-        for e in &entries {
-            write_entry_card(&mut out, e, columns, headers)?;
-        }
+        // Card grid: packs as many cards as fit per row.
+        write_entry_cards(&mut out, &entries, columns, headers)?;
     } else {
         if headers {
             write_header(&mut out, columns, &widths, table)?;

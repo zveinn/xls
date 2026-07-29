@@ -116,58 +116,6 @@ impl Entry {
         })
     }
 
-    /// Classic permission string, e.g. `drwxr-xr-x`.
-    pub fn mode_string(&self) -> String {
-        let mut s = String::with_capacity(10);
-        s.push(match self.kind {
-            Kind::File => '-',
-            Kind::Dir => 'd',
-            Kind::Symlink => 'l',
-            Kind::Fifo => 'p',
-            Kind::Socket => 's',
-            Kind::Block => 'b',
-            Kind::Char => 'c',
-            Kind::Unknown => '?',
-        });
-
-        let m = self.mode;
-        // user
-        s.push(if m & 0o400 != 0 { 'r' } else { '-' });
-        s.push(if m & 0o200 != 0 { 'w' } else { '-' });
-        s.push(match (m & 0o100 != 0, m & 0o4000 != 0) {
-            (true, true) => 's',
-            (false, true) => 'S',
-            (true, false) => 'x',
-            (false, false) => '-',
-        });
-        // group
-        s.push(if m & 0o040 != 0 { 'r' } else { '-' });
-        s.push(if m & 0o020 != 0 { 'w' } else { '-' });
-        s.push(match (m & 0o010 != 0, m & 0o2000 != 0) {
-            (true, true) => 's',
-            (false, true) => 'S',
-            (true, false) => 'x',
-            (false, false) => '-',
-        });
-        // other
-        s.push(if m & 0o004 != 0 { 'r' } else { '-' });
-        s.push(if m & 0o002 != 0 { 'w' } else { '-' });
-        s.push(match (m & 0o001 != 0, m & 0o1000 != 0) {
-            (true, true) => 't',
-            (false, true) => 'T',
-            (true, false) => 'x',
-            (false, false) => '-',
-        });
-
-        if self.extras.has_acl {
-            s.push('+');
-        } else if !self.extras.xattrs.is_empty() {
-            s.push('@');
-        }
-
-        s
-    }
-
     pub fn xfs(&self) -> Option<&XfsInfo> {
         self.extras.xfs.as_ref()
     }
