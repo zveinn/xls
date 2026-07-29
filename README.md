@@ -2,6 +2,28 @@
 
 A colorful, modern directory listing for Linux.
 
+## Screenshots
+
+**Default** (`xls --noTable`)
+
+![Default listing](assets/default.png)
+
+**Table frame** (`xls`)
+
+![Table frame](assets/table.png)
+
+**Sort by size** (`xls --sort SIZE --noTable`)
+
+![Sorted by size](assets/sort-size.png)
+
+**Custom columns** (`xls --columns NAME,SIZE,MTIME,USER --noTable`)
+
+![Custom columns](assets/columns.png)
+
+**Card layout** when the table is wider than the terminal (`xls --all`)
+
+![Card layout](assets/cards.png)
+
 ## Install
 
 Download the binary for your architecture from the
