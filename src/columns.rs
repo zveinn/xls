@@ -4,9 +4,14 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
     Mtime,
+    /// Classic full mode string (optional; not in defaults).
     Perms,
+    /// Owner name + user permission triad.
     User,
+    /// Group name + group permission triad.
     Group,
+    /// Other permission triad (+ ACL/xattr markers).
+    Other,
     Size,
     Name,
     Nlink,
@@ -23,13 +28,13 @@ pub enum Column {
 }
 
 impl Column {
-    /// Default column set (previous basic view).
+    /// Default column set.
     pub fn defaults() -> Vec<Self> {
         vec![
             Self::Mtime,
-            Self::Perms,
             Self::User,
             Self::Group,
+            Self::Other,
             Self::Size,
             Self::Name,
         ]
@@ -39,10 +44,10 @@ impl Column {
     pub fn all() -> Vec<Self> {
         vec![
             Self::Mtime,
-            Self::Perms,
             Self::Nlink,
             Self::User,
             Self::Group,
+            Self::Other,
             Self::Size,
             Self::Blocks,
             Self::Sparse,
@@ -64,6 +69,7 @@ impl Column {
             Self::Perms => "PERMS",
             Self::User => "USER",
             Self::Group => "GROUP",
+            Self::Other => "OTHER",
             Self::Size => "SIZE",
             Self::Name => "NAME",
             Self::Nlink => "N",
@@ -83,8 +89,8 @@ impl Column {
     /// All column names for help / errors.
     pub fn names() -> &'static [&'static str] {
         &[
-            "MTIME", "PERMS", "USER", "GROUP", "SIZE", "NAME", "N", "BLOCKS", "S", "INO:IGEN",
-            "DEV", "ATIME", "CTIME", "BIRTH", "FLAGS", "XATTRS", "XFS",
+            "MTIME", "USER", "GROUP", "OTHER", "SIZE", "NAME", "N", "BLOCKS", "S", "INO:IGEN",
+            "DEV", "ATIME", "CTIME", "BIRTH", "FLAGS", "XATTRS", "XFS", "PERMS",
         ]
     }
 
@@ -95,6 +101,7 @@ impl Column {
             "PERMS" | "MODE" | "PERMISSIONS" => Ok(Self::Perms),
             "USER" | "OWNER" | "UID" => Ok(Self::User),
             "GROUP" | "GID" => Ok(Self::Group),
+            "OTHER" | "OTH" | "WORLD" => Ok(Self::Other),
             "SIZE" => Ok(Self::Size),
             "NAME" => Ok(Self::Name),
             "N" | "NLINK" | "LINKS" => Ok(Self::Nlink),
@@ -116,7 +123,6 @@ impl Column {
     }
 
     /// Parse a comma-separated column list (order preserved).
-    /// Empty tokens are skipped. At least one column required.
     pub fn parse_list(s: &str) -> Result<Vec<Self>, String> {
         let cols: Result<Vec<_>, _> = s
             .split(',')
@@ -138,6 +144,7 @@ impl Column {
             | Self::Perms
             | Self::User
             | Self::Group
+            | Self::Other
             | Self::Size
             | Self::Name
             | Self::Nlink
@@ -147,7 +154,6 @@ impl Column {
             | Self::Atime
             | Self::Ctime
             | Self::Birth => 0,
-            // igen, flags, xattrs need ioctls / listxattr
             Self::Ino | Self::Flags | Self::Xattrs => 1,
             Self::Xfs => 2,
         }

@@ -1,4 +1,12 @@
-//! Column-driven colored rendering.
+//! Modern single-line column rendering.
+//!
+//! Visual language (inspired by tools like eza / lsd / modern TUIs):
+//! - columns separated by a dim hairline `│`
+//! - type glyph before names (`▸` dir, `›` exec, `↗` link, …)
+//! - permissions as type + triads: `d rwx·r-x·r-x`
+//! - empty optional fields as an em dash `—`
+//! - sparse as a filled/empty diamond
+//! - size with a slightly brighter number, quieter unit
 
 use std::io::{self, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,20 +21,24 @@ pub const GREEN: &str = "\x1b[92m";
 pub const RED: &str = "\x1b[91m";
 pub const ORANGE: &str = "\x1b[38;5;214m";
 pub const DIM: &str = "\x1b[90m";
-/// Slightly brighter than DIM — used for SIZE so it stays secondary to names.
 pub const SOFT: &str = "\x1b[38;5;247m";
+pub const SOFT_BLUE: &str = "\x1b[38;5;111m";
 pub const HIDDEN_FILE: &str = "\x1b[38;5;87m";
 pub const HIDDEN_DIR: &str = "\x1b[38;5;141m";
 pub const HIDDEN_EXEC: &str = "\x1b[38;5;227m";
 pub const HIDDEN_LINK: &str = "\x1b[38;5;213m";
 pub const RESET: &str = "\x1b[0m";
 
+/// Dim column separator between fields.
+const SEP: &str = "\x1b[90m │ \x1b[0m";
+
 #[derive(Default)]
 pub struct Widths {
     perms: usize,
     nlink: usize,
-    user: usize,
-    group: usize,
+    user: usize,  // "rwx name"
+    group: usize, // "r-x name"
+    other: usize, // "r-x" (+ markers)
     size: usize,
     blocks: usize,
     ino: usize,
@@ -35,6 +47,7 @@ pub struct Widths {
     flags: usize,
     xattrs: usize,
     xfs: usize,
+    name: usize, // glyph + space + name
 }
 
 impl Widths {
@@ -49,6 +62,7 @@ impl Widths {
                 Column::Perms => w.perms = w.perms.max("PERMS".len()),
                 Column::User => w.user = w.user.max("USER".len()),
                 Column::Group => w.group = w.group.max("GROUP".len()),
+                Column::Other => w.other = w.other.max("OTHER".len()),
                 Column::Size => w.size = w.size.max("SIZE".len()),
                 Column::Nlink => w.nlink = w.nlink.max("N".len()),
                 Column::Blocks => w.blocks = w.blocks.max("BLOCKS".len()),
@@ -57,38 +71,41 @@ impl Widths {
                 Column::Flags => w.flags = w.flags.max("FLAGS".len()),
                 Column::Xattrs => w.xattrs = w.xattrs.max("XATTRS".len()),
                 Column::Xfs => w.xfs = w.xfs.max("XFS".len()),
+                Column::Name => w.name = w.name.max("NAME".len()),
                 Column::Mtime
                 | Column::Atime
                 | Column::Ctime
                 | Column::Birth
-                | Column::Sparse
-                | Column::Name => {}
+                | Column::Sparse => {}
             }
         }
 
         for e in entries {
             for c in cols {
                 match c {
-                    Column::Perms => w.perms = w.perms.max(e.mode_string().len()),
-                    Column::User => w.user = w.user.max(e.user.len()),
-                    Column::Group => w.group = w.group.max(e.group.len()),
+                    Column::Perms => w.perms = w.perms.max(perms_plain(e).chars().count()),
+                    Column::User => {
+                        w.user = w.user.max(owner_plain(&triad_user(e), &e.user).chars().count())
+                    }
+                    Column::Group => {
+                        w.group = w
+                            .group
+                            .max(owner_plain(&triad_group(e), &e.group).chars().count())
+                    }
+                    Column::Other => w.other = w.other.max(other_plain(e).chars().count()),
                     Column::Size => w.size = w.size.max(human_size(e.size).len()),
                     Column::Nlink => w.nlink = w.nlink.max(e.nlink.to_string().len()),
-                    Column::Blocks => {
-                        w.blocks = w.blocks.max(format!("{}b/{}", e.blocks, e.blksize).len())
-                    }
+                    Column::Blocks => w.blocks = w.blocks.max(format_blocks(e).len()),
                     Column::Ino => w.ino = w.ino.max(format_ino(e).len()),
                     Column::Dev => w.dev = w.dev.max(format_dev(e).len()),
-                    Column::Flags => w.flags = w.flags.max(join_or_dash(&e.extras.flags).len()),
+                    Column::Flags => w.flags = w.flags.max(format_list_field(&e.extras.flags).len()),
                     Column::Xattrs => {
-                        let xa = if e.extras.xattrs.is_empty() {
-                            "-".to_string()
-                        } else {
-                            e.extras.xattrs.join(",")
-                        };
-                        w.xattrs = w.xattrs.max(xa.len());
+                        w.xattrs = w.xattrs.max(format_list_field_owned(&e.extras.xattrs).len())
                     }
                     Column::Xfs => w.xfs = w.xfs.max(format_xfs(e).len()),
+                    Column::Name => {
+                        w.name = w.name.max(2 + e.name.chars().count());
+                    }
                     _ => {}
                 }
             }
@@ -101,6 +118,7 @@ impl Widths {
             Column::Perms => self.perms,
             Column::User => self.user,
             Column::Group => self.group,
+            Column::Other => self.other,
             Column::Size => self.size,
             Column::Nlink => self.nlink,
             Column::Blocks => self.blocks,
@@ -111,7 +129,7 @@ impl Widths {
             Column::Xfs => self.xfs,
             Column::Mtime | Column::Atime | Column::Ctime | Column::Birth => self.time,
             Column::Sparse => 1,
-            Column::Name => 0,
+            Column::Name => self.name,
         }
     }
 }
@@ -135,19 +153,55 @@ pub fn color_for(e: &Entry) -> &'static str {
     }
 }
 
+/// Type glyph shown beside the name (and used as a quick scan cue).
+fn type_glyph(e: &Entry) -> char {
+    if e.broken_symlink {
+        return '!';
+    }
+    match e.kind {
+        Kind::Dir => '▸',
+        Kind::Symlink => '↗',
+        Kind::File if e.executable => '›',
+        Kind::Fifo => '┊',
+        Kind::Socket => '◌',
+        Kind::Block | Kind::Char => '▣',
+        Kind::File | Kind::Unknown => '·',
+    }
+}
+
 pub fn write_header(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Result<()> {
     for (i, c) in cols.iter().enumerate() {
         if i > 0 {
-            write!(out, " ")?;
+            write!(out, "{SEP}")?;
         }
         let label = c.header();
         let width = w.width_for(*c);
-        if width == 0 {
-            write!(out, "{BOLD_WHITE}{label}{RESET}")?;
+        // NAME header accounts for glyph column.
+        if *c == Column::Name {
+            write!(out, "{BOLD_WHITE}{label:<width$}{RESET}", width = width.max(label.len()))?;
         } else if matches!(c, Column::Size | Column::Nlink) {
             write!(out, "{BOLD_WHITE}{label:>width$}{RESET}")?;
+        } else if width == 0 {
+            write!(out, "{BOLD_WHITE}{label}{RESET}")?;
         } else {
             write!(out, "{BOLD_WHITE}{label:<width$}{RESET}")?;
+        }
+    }
+    writeln!(out)?;
+    // Subtle rule under the header for a card-like scan line.
+    write_header_rule(out, cols, w)
+}
+
+fn write_header_rule(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Result<()> {
+    for (i, c) in cols.iter().enumerate() {
+        if i > 0 {
+            write!(out, "{DIM}─┼─{RESET}")?;
+        }
+        let width = w.width_for(*c).max(c.header().len());
+        // Sparse is 1 wide; name uses measured width.
+        let width = if *c == Column::Sparse { 1 } else { width };
+        for _ in 0..width {
+            write!(out, "{DIM}─{RESET}")?;
         }
     }
     writeln!(out)
@@ -156,7 +210,7 @@ pub fn write_header(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Re
 pub fn write_entry(out: &mut impl Write, e: &Entry, cols: &[Column], w: &Widths) -> io::Result<()> {
     for (i, c) in cols.iter().enumerate() {
         if i > 0 {
-            write!(out, " ")?;
+            write!(out, "{SEP}")?;
         }
         write_column(out, e, *c, w)?;
     }
@@ -165,99 +219,272 @@ pub fn write_entry(out: &mut impl Write, e: &Entry, cols: &[Column], w: &Widths)
 
 fn write_column(out: &mut impl Write, e: &Entry, c: Column, w: &Widths) -> io::Result<()> {
     match c {
-        Column::Mtime => write!(
+        Column::Mtime => write_time(out, e.mtime, w.time),
+        Column::Atime => write_time(out, e.atime, w.time),
+        Column::Ctime => write_time(
             out,
-            "{DIM}{v:<width$}{RESET}",
-            v = fmt_time_short(e.mtime),
-            width = w.time
+            epoch_to_system(e.ctime_secs),
+            w.time,
         ),
-        Column::Atime => write!(
-            out,
-            "{DIM}{v:<width$}{RESET}",
-            v = fmt_time_short(e.atime),
-            width = w.time
-        ),
-        Column::Ctime => write!(
-            out,
-            "{DIM}{v:<width$}{RESET}",
-            v = fmt_epoch_short(e.ctime_secs),
-            width = w.time
-        ),
-        Column::Birth => write!(
-            out,
-            "{DIM}{v:<width$}{RESET}",
-            v = fmt_time_short(e.birth),
-            width = w.time
-        ),
+        Column::Birth => write_time(out, e.birth, w.time),
         Column::Perms => write_perms(out, e, w.perms),
-        Column::User => write!(
-            out,
-            "{LIGHT_BLUE}{v:<width$}{RESET}",
-            v = e.user,
-            width = w.user
-        ),
-        Column::Group => write!(
-            out,
-            "{LIGHT_BLUE}{v:<width$}{RESET}",
-            v = e.group,
-            width = w.group
-        ),
-        Column::Size => write!(
-            out,
-            "{SOFT}{v:>width$}{RESET}",
-            v = human_size(e.size),
-            width = w.size
-        ),
-        Column::Name => write_name(out, e, color_for(e)),
+        Column::User => write_owner_col(out, &triad_user(e), &e.user, w.user),
+        Column::Group => write_owner_col(out, &triad_group(e), &e.group, w.group),
+        Column::Other => write_other_col(out, e, w.other),
+        Column::Size => write_size(out, e.size, w.size),
+        Column::Name => write_name(out, e, w.name),
         Column::Nlink => write!(
             out,
-            "{WHITE}{v:>width$}{RESET}",
+            "{SOFT}{v:>width$}{RESET}",
             v = e.nlink,
             width = w.nlink
         ),
         Column::Blocks => write!(
             out,
             "{DIM}{v:<width$}{RESET}",
-            v = format!("{}b/{}", e.blocks, e.blksize),
+            v = format_blocks(e),
             width = w.blocks
         ),
         Column::Sparse => {
-            let s = if e.sparse { "S" } else { "-" };
-            write!(out, "{DIM}{s}{RESET}")
+            if e.sparse {
+                write!(out, "{ORANGE}◆{RESET}")
+            } else {
+                write!(out, "{DIM}◇{RESET}")
+            }
         }
-        Column::Ino => write!(
-            out,
-            "{DIM}{v:<width$}{RESET}",
-            v = format_ino(e),
-            width = w.ino
-        ),
+        Column::Ino => write_ino(out, e, w.ino),
         Column::Dev => write!(
             out,
             "{DIM}{v:<width$}{RESET}",
             v = format_dev(e),
             width = w.dev
         ),
-        Column::Flags => write!(
+        Column::Flags => write_badge(out, &format_list_field(&e.extras.flags), w.flags),
+        Column::Xattrs => write_badge(
             out,
-            "{ORANGE}{v:<width$}{RESET}",
-            v = join_or_dash(&e.extras.flags),
-            width = w.flags
+            &format_list_field_owned(&e.extras.xattrs),
+            w.xattrs,
         ),
-        Column::Xattrs => {
-            let xa = if e.extras.xattrs.is_empty() {
-                "-".to_string()
-            } else {
-                e.extras.xattrs.join(",")
-            };
-            write!(out, "{ORANGE}{v:<width$}{RESET}", v = xa, width = w.xattrs)
-        }
-        Column::Xfs => write!(
-            out,
-            "{ORANGE}{v:<width$}{RESET}",
-            v = format_xfs(e),
-            width = w.xfs
-        ),
+        Column::Xfs => write_badge(out, &format_xfs(e), w.xfs),
     }
+}
+
+fn write_time(out: &mut impl Write, t: Option<SystemTime>, width: usize) -> io::Result<()> {
+    let plain = fmt_time_short(t);
+    // Split date / time for a two-tone look when well-formed.
+    if let Some((date, time)) = plain.split_once(' ') {
+        write!(out, "{DIM}{date}{RESET} {SOFT}{time}{RESET}")?;
+        let used = plain.chars().count();
+        pad(out, width.saturating_sub(used))?;
+    } else {
+        write!(out, "{DIM}{plain:<width$}{RESET}")?;
+    }
+    Ok(())
+}
+
+fn write_size(out: &mut impl Write, n: u64, width: usize) -> io::Result<()> {
+    let plain = human_size(n);
+    // Right-align the whole token, but paint unit quieter.
+    let pad_n = width.saturating_sub(plain.len());
+    for _ in 0..pad_n {
+        write!(out, " ")?;
+    }
+    if let Some(i) = plain.find(|c: char| c.is_ascii_alphabetic()) {
+        write!(out, "{SOFT}{}{RESET}{DIM}{}{RESET}", &plain[..i], &plain[i..])?;
+    } else {
+        write!(out, "{SOFT}{plain}{RESET}")?;
+    }
+    Ok(())
+}
+
+fn write_ino(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
+    let plain = format_ino(e);
+    if let Some((ino, igen)) = plain.split_once(':') {
+        write!(out, "{SOFT}{ino}{RESET}{DIM}:{igen}{RESET}")?;
+        pad(out, width.saturating_sub(plain.len()))?;
+    } else {
+        write!(out, "{DIM}{plain:<width$}{RESET}")?;
+    }
+    Ok(())
+}
+
+fn write_badge(out: &mut impl Write, text: &str, width: usize) -> io::Result<()> {
+    if text == "—" {
+        write!(out, "{DIM}{text:<width$}{RESET}")
+    } else {
+        // Soft “chip” feel without true background colors (portable).
+        write!(out, "{ORANGE}{text:<width$}{RESET}")
+    }
+}
+
+/// `rwx  sveinn` — triad then identity.
+fn write_owner_col(
+    out: &mut impl Write,
+    triad: &str,
+    name: &str,
+    width: usize,
+) -> io::Result<()> {
+    write_triad(out, triad)?;
+    write!(out, " {SOFT_BLUE}{name}{RESET}")?;
+    let used = owner_plain(triad, name).chars().count();
+    pad(out, width.saturating_sub(used))
+}
+
+/// Other class: triad + optional ACL/xattr markers (no identity name).
+fn write_other_col(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
+    let plain = other_plain(e);
+    write_triad(out, &triad_other(e))?;
+    if e.extras.has_acl {
+        write!(out, "{LIGHT_BLUE}+{RESET}")?;
+    } else if !e.extras.xattrs.is_empty() {
+        write!(out, "{ORANGE}@{RESET}")?;
+    }
+    pad(out, width.saturating_sub(plain.chars().count()))
+}
+
+fn write_triad(out: &mut impl Write, triad: &str) -> io::Result<()> {
+    for ch in triad.chars() {
+        match ch {
+            'r' => write!(out, "{WHITE}r{RESET}")?,
+            'w' => write!(out, "{RED}w{RESET}")?,
+            'x' => write!(out, "{GREEN}x{RESET}")?,
+            's' | 'S' | 't' | 'T' => write!(out, "{ORANGE}{ch}{RESET}")?,
+            '-' => write!(out, "{DIM}-{RESET}")?,
+            other => write!(out, "{DIM}{other}{RESET}")?,
+        }
+    }
+    Ok(())
+}
+
+fn write_perms(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
+    // Optional classic full mode string for `--columns PERMS`.
+    let plain = perms_plain(e);
+    let type_color = color_for(e);
+    let mut chars = plain.chars();
+
+    if let Some(t) = chars.next() {
+        write!(out, "{type_color}{t}{RESET}")?;
+    }
+    if chars.next() == Some(' ') {
+        write!(out, " ")?;
+    }
+
+    for ch in chars {
+        match ch {
+            'r' => write!(out, "{WHITE}r{RESET}")?,
+            'w' => write!(out, "{RED}w{RESET}")?,
+            'x' => write!(out, "{GREEN}x{RESET}")?,
+            's' | 'S' | 't' | 'T' => write!(out, "{ORANGE}{ch}{RESET}")?,
+            '·' => write!(out, "{DIM}·{RESET}")?,
+            '-' => write!(out, "{DIM}-{RESET}")?,
+            '+' => write!(out, "{LIGHT_BLUE}+{RESET}")?,
+            '@' => write!(out, "{ORANGE}@{RESET}")?,
+            other => write!(out, "{DIM}{other}{RESET}")?,
+        }
+    }
+    pad(out, width.saturating_sub(plain.chars().count()))
+}
+
+fn owner_plain(triad: &str, name: &str) -> String {
+    format!("{triad} {name}")
+}
+
+fn triad_user(e: &Entry) -> String {
+    bits_to_triad(e.mode, 0o400, 0o200, 0o100, Some(0o4000), false)
+}
+
+fn triad_group(e: &Entry) -> String {
+    bits_to_triad(e.mode, 0o040, 0o020, 0o010, Some(0o2000), false)
+}
+
+fn triad_other(e: &Entry) -> String {
+    bits_to_triad(e.mode, 0o004, 0o002, 0o001, None, true)
+}
+
+fn other_plain(e: &Entry) -> String {
+    let mut s = triad_other(e);
+    if e.extras.has_acl {
+        s.push('+');
+    } else if !e.extras.xattrs.is_empty() {
+        s.push('@');
+    }
+    s
+}
+
+fn bits_to_triad(
+    mode: u32,
+    r: u32,
+    w: u32,
+    x: u32,
+    special: Option<u32>,
+    sticky: bool,
+) -> String {
+    let mut s = String::with_capacity(3);
+    s.push(if mode & r != 0 { 'r' } else { '-' });
+    s.push(if mode & w != 0 { 'w' } else { '-' });
+    let exec = mode & x != 0;
+    let ch = if sticky {
+        let st = mode & 0o1000 != 0;
+        match (exec, st) {
+            (true, true) => 't',
+            (false, true) => 'T',
+            (true, false) => 'x',
+            (false, false) => '-',
+        }
+    } else {
+        let sp = special.is_some_and(|b| mode & b != 0);
+        match (exec, sp) {
+            (true, true) => 's',
+            (false, true) => 'S',
+            (true, false) => 'x',
+            (false, false) => '-',
+        }
+    };
+    s.push(ch);
+    s
+}
+
+fn write_name(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
+    let color = color_for(e);
+    let glyph = type_glyph(e);
+    write!(out, "{color}{glyph}{RESET} {color}{name}{RESET}", name = e.name)?;
+
+    let mut used = 2 + e.name.chars().count();
+    if let Some(target) = &e.symlink {
+        let tc = if e.broken_symlink { RED } else { ORANGE };
+        write!(out, " {DIM}→{RESET} {tc}{target}{RESET}")?;
+        // Don't force-pad long symlink targets into the column width.
+        used = width; // skip trailing pad
+    }
+    pad(out, width.saturating_sub(used))
+}
+
+/// `d rwx·r-x·r-x` (+ optional ACL/xattr marker).
+fn perms_plain(e: &Entry) -> String {
+    let classic = e.mode_string();
+    let mut chars = classic.chars();
+    let t = chars.next().unwrap_or('?');
+    let rest: String = chars.collect();
+    // rest is 9 permission bits, optionally +/@
+    let (bits, extra) = if rest.ends_with('+') || rest.ends_with('@') {
+        let mut b = rest.clone();
+        let ex = b.pop().unwrap();
+        (b, Some(ex))
+    } else {
+        (rest, None)
+    };
+    let u = bits.get(0..3).unwrap_or("---");
+    let g = bits.get(3..6).unwrap_or("---");
+    let o = bits.get(6..9).unwrap_or("---");
+    let mut s = format!("{t} {u}·{g}·{o}");
+    if let Some(ex) = extra {
+        s.push(ex);
+    }
+    s
+}
+
+fn format_blocks(e: &Entry) -> String {
+    format!("{}b/{}", e.blocks, e.blksize)
 }
 
 fn format_ino(e: &Entry) -> String {
@@ -265,77 +492,67 @@ fn format_ino(e: &Entry) -> String {
         .extras
         .inode_gen
         .map(|g| g.to_string())
-        .unwrap_or_else(|| "-".into());
+        .unwrap_or_else(|| "—".into());
     format!("{}:{}", e.ino, igen)
 }
 
 fn format_dev(e: &Entry) -> String {
     let mut s = format!("{}:{}", e.dev_major, e.dev_minor);
     if matches!(e.kind, Kind::Block | Kind::Char) {
-        s.push_str(&format!(" rdev={}:{}", e.rdev_major, e.rdev_minor));
+        s.push_str(&format!(" ▸ {}:{}", e.rdev_major, e.rdev_minor));
     }
     s
 }
 
 fn format_xfs(e: &Entry) -> String {
     match e.xfs() {
-        None => "-".into(),
+        None => "—".into(),
         Some(x) => {
-            let flags = join_or_dash(&x.xflags);
+            let flags = if x.xflags.is_empty() {
+                "—".into()
+            } else {
+                x.xflags.join(",")
+            };
             let mut s = format!(
-                "{flags},exts={},proj={},esz={},cow={}",
+                "{flags} · exts={} · proj={} · esz={} · cow={}",
                 x.nextents, x.projid, x.extsize, x.cowextsize
             );
             if let (Some(mem), Some(min), Some(max)) = (x.dio_mem, x.dio_min, x.dio_max) {
-                s.push_str(&format!(",dio={mem}/{min}/{max}"));
+                s.push_str(&format!(" · dio={mem}/{min}/{max}"));
             }
             s
         }
     }
 }
 
-fn write_perms(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
-    let plain = e.mode_string();
-    let type_color = color_for(e);
-
-    for (i, ch) in plain.chars().enumerate() {
-        let color = if i == 0 {
-            type_color
-        } else {
-            match ch {
-                'r' => WHITE,
-                'w' => RED,
-                'x' => GREEN,
-                's' | 'S' | 't' | 'T' => ORANGE,
-                '+' => LIGHT_BLUE,
-                '@' => ORANGE,
-                _ => DIM,
-            }
-        };
-        write!(out, "{color}{ch}{RESET}")?;
+fn format_list_field(items: &[&str]) -> String {
+    if items.is_empty() {
+        "—".into()
+    } else {
+        items.join(" · ")
     }
+}
 
-    let pad = width.saturating_sub(plain.chars().count());
-    for _ in 0..pad {
+fn format_list_field_owned(items: &[String]) -> String {
+    if items.is_empty() {
+        "—".into()
+    } else {
+        items.join(" · ")
+    }
+}
+
+fn pad(out: &mut impl Write, n: usize) -> io::Result<()> {
+    for _ in 0..n {
         write!(out, " ")?;
     }
     Ok(())
 }
 
-fn write_name(out: &mut impl Write, e: &Entry, color: &str) -> io::Result<()> {
-    write!(out, "{color}{name}{RESET}", name = e.name)?;
-    if let Some(target) = &e.symlink {
-        let tc = if e.broken_symlink { RED } else { ORANGE };
-        write!(out, " {DIM}->{RESET} {tc}{target}{RESET}")?;
-    }
-    Ok(())
-}
-
-fn join_or_dash(items: &[&str]) -> String {
-    if items.is_empty() {
-        "-".into()
+fn epoch_to_system(secs: i64) -> Option<SystemTime> {
+    if secs <= 0 {
+        None
     } else {
-        items.join(",")
+        Some(UNIX_EPOCH + Duration::from_secs(secs as u64))
     }
 }
 
@@ -363,14 +580,6 @@ fn fmt_time_short(t: Option<SystemTime>) -> String {
     }
 }
 
-fn fmt_epoch_short(secs: i64) -> String {
-    if secs <= 0 {
-        return "—".into();
-    }
-    let t = UNIX_EPOCH + Duration::from_secs(secs as u64);
-    fmt_time_short(Some(t))
-}
-
 fn system_parts(t: SystemTime) -> Option<(u64, u64, u64, u64, u64, u64)> {
     let secs = t.duration_since(UNIX_EPOCH).ok()?.as_secs();
     let z = secs / 86400;
@@ -392,3 +601,4 @@ fn system_parts(t: SystemTime) -> Option<(u64, u64, u64, u64, u64, u64)> {
 
     Some((y as u64, m as u64, d, h, mi, s))
 }
+

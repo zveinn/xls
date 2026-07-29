@@ -167,7 +167,7 @@ fn print_help() {
     {k}{defaults}{RESET}
 
   {k}--all{RESET} order:
-    {k}MTIME,PERMS,N,USER,GROUP,SIZE,BLOCKS,S,INO:IGEN,DEV,ATIME,CTIME,BIRTH,FLAGS,XATTRS,XFS,NAME{RESET}
+    {k}MTIME,N,USER,GROUP,OTHER,SIZE,BLOCKS,S,INO:IGEN,DEV,ATIME,CTIME,BIRTH,FLAGS,XATTRS,XFS,NAME{RESET}
 
   Available:
     {k}{fields}{RESET}
@@ -175,7 +175,7 @@ fn print_help() {
   Examples:
     {k}xls --all{RESET}
     {k}xls --columns NAME,SIZE{RESET}
-    {k}xls --columns=MTIME,PERMS,USER,GROUP,SIZE,NAME{RESET}
+    {k}xls --columns=MTIME,USER,GROUP,OTHER,SIZE,NAME{RESET}
     {k}xls --columns MTIME,NAME,XFS --sort SIZE{RESET}
 
 {h}SORTING{RESET}
@@ -187,7 +187,8 @@ fn print_help() {
   Notes:
     {k}SIZE{RESET}, {k}N{RESET}, {k}BLOCKS{RESET}, {k}INO:IGEN{RESET}, {k}DEV{RESET}  numeric (low → high)
     {k}MTIME{RESET}, {k}ATIME{RESET}, {k}CTIME{RESET}, {k}BIRTH{RESET}   oldest first
-    {k}NAME{RESET}, {k}USER{RESET}, {k}GROUP{RESET}, {k}PERMS{RESET}     lexicographic A–Z
+    {k}NAME{RESET}, {k}USER{RESET}, {k}GROUP{RESET}     lexicographic A–Z
+    {k}OTHER{RESET}                          by other-class mode bits
     Aliases: {d}NLINK/LINKS{RESET}→N, {d}INODE{RESET}→INO:IGEN, {d}OWNER{RESET}→USER, …
 
 {h}COLORS{RESET}
@@ -204,14 +205,16 @@ fn print_help() {
 
 {h}COLUMN REFERENCE{RESET}
   {k}MTIME{RESET}     Last content modification time (UTC, DD-MM-YYYY HH:MM:SS)
-  {k}PERMS{RESET}     Classic mode string (color-coded), e.g. {d}drwxr-xr-x{RESET}
-  {k}USER{RESET}      Owner user name
-  {k}GROUP{RESET}     Owner group name
+  {k}USER{RESET}      User triad + owner name, e.g. {d}rwx sveinn{RESET}
+  {k}GROUP{RESET}     Group triad + group name, e.g. {d}r-x sveinn{RESET}
+  {k}OTHER{RESET}     Other triad (+ {d}+{RESET} ACL / {d}@{RESET} xattr), e.g. {d}r-x{RESET}
+  {k}PERMS{RESET}     Optional classic full mode string ({d}d rwx·r-x·r-x{RESET})
   {k}SIZE{RESET}      Logical size (human-readable: B/K/M/G/T)
-  {k}NAME{RESET}      Entry name (color indicates type); symlinks show {d}->{RESET} target
+  {k}NAME{RESET}      Glyph + name ({d}▸{RESET} dir, {d}·{RESET} file, {d}›{RESET} exec,
+                    {d}↗{RESET} link); symlinks show {d}→{RESET} target
   {k}N{RESET}         Hard link count
   {k}BLOCKS{RESET}    Allocated blocks and I/O block size ({d}<st_blocks>b/<blksize>{RESET})
-  {k}S{RESET}         Sparse flag: {d}S{RESET} if allocated < size, else {d}-{RESET}
+  {k}S{RESET}         Sparse: {ORANGE}◆{RESET} sparse, {d}◇{RESET} not
   {k}INO:IGEN{RESET}  Inode number and generation (when available)
   {k}DEV{RESET}       Device id ({d}major:minor{RESET}); devices also show {d}rdev{RESET}
   {k}ATIME{RESET}     Last access time (may be stale on noatime mounts)
