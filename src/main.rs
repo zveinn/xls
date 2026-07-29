@@ -25,6 +25,7 @@ enum Cli {
         columns: Vec<Column>,
         sort: Option<Column>,
         headers: bool,
+        table: bool,
     },
 }
 
@@ -40,8 +41,9 @@ fn main() -> ExitCode {
             columns,
             sort,
             headers,
+            table,
         }) => {
-            if let Err(e) = run(&path, &columns, sort, headers) {
+            if let Err(e) = run(&path, &columns, sort, headers, table) {
                 eprintln!("{RED}xls: {e}{RESET}");
                 return ExitCode::FAILURE;
             }
@@ -60,6 +62,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut help = false;
     let mut sort = None;
     let mut headers = true;
+    let mut table = true;
     let mut columns = None;
     let mut all = false;
     let mut i = 0;
@@ -69,6 +72,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
         match a {
             "-h" | "--help" => help = true,
             "--noHeaders" | "--no-headers" => headers = false,
+            "--noTable" | "--no-table" => table = false,
             "--all" => all = true,
             "--columns" => {
                 i += 1;
@@ -132,6 +136,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
         columns,
         sort,
         headers,
+        table,
     })
 }
 
@@ -160,6 +165,7 @@ fn print_help() {
   {k}--columns{RESET} {k}COLS{RESET}   Comma-separated columns to show, in order
   {k}--sort{RESET} {k}COL{RESET}       Sort by column (always ascending)
   {k}--noHeaders{RESET}      Do not print the column header row
+  {k}--noTable{RESET}        Skip table frame (no {d}│{RESET} / {d}─┼─{RESET} rules)
   {k}-h{RESET}, {k}--help{RESET}      Show this help and exit
 
 {h}COLUMNS{RESET}
@@ -205,9 +211,9 @@ fn print_help() {
 
 {h}COLUMN REFERENCE{RESET}
   {k}MTIME{RESET}     Last content modification time (UTC, DD-MM-YYYY HH:MM:SS)
-  {k}USER{RESET}      User triad + owner name, e.g. {d}rwx sveinn{RESET}
-  {k}GROUP{RESET}     Group triad + group name, e.g. {d}r-x sveinn{RESET}
-  {k}OTHER{RESET}     Other triad (+ {d}+{RESET} ACL / {d}@{RESET} xattr), e.g. {d}r-x{RESET}
+  {k}USER{RESET}      Owner name + triad, e.g. {d}sveinn [rwx]{RESET}
+  {k}GROUP{RESET}     Group name + triad, e.g. {d}sveinn [r-x]{RESET}
+  {k}OTHER{RESET}     Other triad in brackets (+ {d}+{RESET} ACL / {d}@{RESET} xattr), e.g. {d}[r-x]{RESET}
   {k}PERMS{RESET}     Optional classic full mode string ({d}d rwx·r-x·r-x{RESET})
   {k}SIZE{RESET}      Logical size (human-readable: B/K/M/G/T)
   {k}TYPE{RESET}      File kind: {d}dir{RESET}, {d}file{RESET}, {d}exec{RESET}, {d}link{RESET},
@@ -242,6 +248,7 @@ fn run(
     columns: &[Column],
     sort: Option<Column>,
     headers: bool,
+    table: bool,
 ) -> io::Result<()> {
     let mut detail = Column::max_detail(columns);
     if let Some(key) = sort {
@@ -281,10 +288,10 @@ fn run(
     let widths = Widths::measure(&entries, columns);
     let mut out = io::stdout().lock();
     if headers {
-        write_header(&mut out, columns, &widths)?;
+        write_header(&mut out, columns, &widths, table)?;
     }
     for e in &entries {
-        write_entry(&mut out, e, columns, &widths)?;
+        write_entry(&mut out, e, columns, &widths, table)?;
     }
     out.flush()
 }

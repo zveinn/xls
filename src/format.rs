@@ -29,8 +29,18 @@ pub const HIDDEN_EXEC: &str = "\x1b[38;5;227m";
 pub const HIDDEN_LINK: &str = "\x1b[38;5;213m";
 pub const RESET: &str = "\x1b[0m";
 
-/// Dim column separator between fields.
-const SEP: &str = "\x1b[90m │ \x1b[0m";
+/// Dim column separator between fields (table mode).
+const SEP_TABLE: &str = "\x1b[90m │ \x1b[0m";
+/// Plain spacing when the table frame is off.
+const SEP_PLAIN: &str = "  ";
+
+fn sep(table: bool) -> &'static str {
+    if table {
+        SEP_TABLE
+    } else {
+        SEP_PLAIN
+    }
+}
 
 #[derive(Default)]
 pub struct Widths {
@@ -175,10 +185,15 @@ fn type_word(e: &Entry) -> &'static str {
     }
 }
 
-pub fn write_header(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Result<()> {
+pub fn write_header(
+    out: &mut impl Write,
+    cols: &[Column],
+    w: &Widths,
+    table: bool,
+) -> io::Result<()> {
     for (i, c) in cols.iter().enumerate() {
         if i > 0 {
-            write!(out, "{SEP}")?;
+            write!(out, "{}", sep(table))?;
         }
         let label = c.header();
         let width = w.width_for(*c);
@@ -191,7 +206,10 @@ pub fn write_header(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Re
         }
     }
     writeln!(out)?;
-    write_header_rule(out, cols, w)
+    if table {
+        write_header_rule(out, cols, w)?;
+    }
+    Ok(())
 }
 
 fn write_header_rule(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::Result<()> {
@@ -200,7 +218,6 @@ fn write_header_rule(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::R
             write!(out, "{DIM}─┼─{RESET}")?;
         }
         let width = w.width_for(*c).max(c.header().len());
-        // Sparse is 1 wide; name uses measured width.
         let width = if *c == Column::Sparse { 1 } else { width };
         for _ in 0..width {
             write!(out, "{DIM}─{RESET}")?;
@@ -209,10 +226,16 @@ fn write_header_rule(out: &mut impl Write, cols: &[Column], w: &Widths) -> io::R
     writeln!(out)
 }
 
-pub fn write_entry(out: &mut impl Write, e: &Entry, cols: &[Column], w: &Widths) -> io::Result<()> {
+pub fn write_entry(
+    out: &mut impl Write,
+    e: &Entry,
+    cols: &[Column],
+    w: &Widths,
+    table: bool,
+) -> io::Result<()> {
     for (i, c) in cols.iter().enumerate() {
         if i > 0 {
-            write!(out, "{SEP}")?;
+            write!(out, "{}", sep(table))?;
         }
         write_column(out, e, *c, w)?;
     }
@@ -320,23 +343,26 @@ fn write_badge(out: &mut impl Write, text: &str, width: usize) -> io::Result<()>
     }
 }
 
-/// `rwx  sveinn` — triad then identity.
+/// `sveinn [rwx]` — identity then triad in brackets.
 fn write_owner_col(
     out: &mut impl Write,
     triad: &str,
     name: &str,
     width: usize,
 ) -> io::Result<()> {
+    write!(out, "{SOFT_BLUE}{name}{RESET} {DIM}[{RESET}")?;
     write_triad(out, triad)?;
-    write!(out, " {SOFT_BLUE}{name}{RESET}")?;
+    write!(out, "{DIM}]{RESET}")?;
     let used = owner_plain(triad, name).chars().count();
     pad(out, width.saturating_sub(used))
 }
 
-/// Other class: triad + optional ACL/xattr markers (no identity name).
+/// Other class: `[r-x]` + optional ACL/xattr markers.
 fn write_other_col(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
     let plain = other_plain(e);
+    write!(out, "{DIM}[{RESET}")?;
     write_triad(out, &triad_other(e))?;
+    write!(out, "{DIM}]{RESET}")?;
     if e.extras.has_acl {
         write!(out, "{LIGHT_BLUE}+{RESET}")?;
     } else if !e.extras.xattrs.is_empty() {
@@ -389,7 +415,7 @@ fn write_perms(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> 
 }
 
 fn owner_plain(triad: &str, name: &str) -> String {
-    format!("{triad} {name}")
+    format!("{name} [{triad}]")
 }
 
 fn triad_user(e: &Entry) -> String {
@@ -405,7 +431,7 @@ fn triad_other(e: &Entry) -> String {
 }
 
 fn other_plain(e: &Entry) -> String {
-    let mut s = triad_other(e);
+    let mut s = format!("[{}]", triad_other(e));
     if e.extras.has_acl {
         s.push('+');
     } else if !e.extras.xattrs.is_empty() {
@@ -448,9 +474,9 @@ fn bits_to_triad(
 }
 
 fn write_type(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
-    let color = color_for(e);
     let word = type_word(e);
-    write!(out, "{color}{word:<width$}{RESET}")
+    // Dim type labels so NAME stays the visual focus.
+    write!(out, "{DIM}{word:<width$}{RESET}")
 }
 
 fn write_name(out: &mut impl Write, e: &Entry, width: usize) -> io::Result<()> {
