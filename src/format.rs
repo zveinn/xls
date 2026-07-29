@@ -113,17 +113,17 @@ pub fn write_header(out: &mut impl Write, mode: Mode, w: &Widths) -> io::Result<
     match mode {
         Mode::Basic => writeln!(
             out,
-            "{LIGHT_BLUE}{perms:<pw$} {user:<uw$} {group:<gw$} {mtime:<tw$} {size:>sw$} {name}{RESET}",
+            "{LIGHT_BLUE}{mtime:<tw$} {perms:<pw$} {user:<uw$} {group:<gw$} {size:>sw$} {name}{RESET}",
+            mtime = "MTIME",
             perms = "PERMS",
             user = "USER",
             group = "GROUP",
-            mtime = "MTIME",
             size = "SIZE",
             name = "NAME",
+            tw = w.time,
             pw = w.mode,
             uw = w.user,
             gw = w.group,
-            tw = w.time,
             sw = w.size,
         ),
         Mode::All => write_detail_header(out, w, false),
@@ -134,7 +134,8 @@ pub fn write_header(out: &mut impl Write, mode: Mode, w: &Widths) -> io::Result<
 fn write_detail_header(out: &mut impl Write, w: &Widths, xfs: bool) -> io::Result<()> {
     write!(
         out,
-        "{LIGHT_BLUE}{perms:<pw$} {nlink:>nw$} {user:<uw$} {group:<gw$} {size:>sw$} {blocks:<bw$} {sp} {ino:<iw$} {dev:<dw$} {mtime:<tw$} {atime:<tw$} {ctime:<tw$} {birth:<tw$} {flags:<fw$} {xattrs:<xw$}",
+        "{LIGHT_BLUE}{mtime:<tw$} {perms:<pw$} {nlink:>nw$} {user:<uw$} {group:<gw$} {size:>sw$} {blocks:<bw$} {sp} {ino:<iw$} {dev:<dw$} {atime:<tw$} {ctime:<tw$} {birth:<tw$} {flags:<fw$} {xattrs:<xw$}",
+        mtime = "MTIME",
         perms = "PERMS",
         nlink = "N",
         user = "USER",
@@ -144,12 +145,12 @@ fn write_detail_header(out: &mut impl Write, w: &Widths, xfs: bool) -> io::Resul
         sp = "S",
         ino = "INO:IGEN",
         dev = "DEV",
-        mtime = "MTIME",
         atime = "ATIME",
         ctime = "CTIME",
         birth = "BIRTH",
         flags = "FLAGS",
         xattrs = "XATTRS",
+        tw = w.time,
         pw = w.mode,
         nw = w.nlink,
         uw = w.user,
@@ -158,7 +159,6 @@ fn write_detail_header(out: &mut impl Write, w: &Widths, xfs: bool) -> io::Resul
         bw = w.blocks,
         iw = w.ino,
         dw = w.dev,
-        tw = w.time,
         fw = w.flags,
         xw = w.xattrs,
     )?;
@@ -181,15 +181,15 @@ fn write_basic(out: &mut impl Write, e: &Entry, w: &Widths) -> io::Result<()> {
     let size = human_size(e.size);
     let mtime = fmt_time_short(e.mtime);
 
+    write!(out, "{DIM}{mtime:<tw$}{RESET} ", tw = w.time)?;
     write_perms(out, e, w.mode)?;
     write!(
         out,
-        " {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {DIM}{mtime:<tw$}{RESET} {SOFT}{size:>sw$}{RESET} ",
+        " {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {SOFT}{size:>sw$}{RESET} ",
         user = e.user,
         group = e.group,
         uw = w.user,
         gw = w.group,
-        tw = w.time,
         sw = w.size,
     )?;
     write_name(out, e, color)?;
@@ -211,10 +211,16 @@ fn write_all(out: &mut impl Write, e: &Entry, w: &Widths, xfs: bool) -> io::Resu
     };
     let sparse = if e.sparse { "S" } else { "-" };
 
+    write!(
+        out,
+        "{DIM}{mtime:<tw$}{RESET} ",
+        mtime = fmt_time_short(e.mtime),
+        tw = w.time,
+    )?;
     write_perms(out, e, w.mode)?;
     write!(
         out,
-        " {WHITE}{nlink:>nw$}{RESET} {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {SOFT}{size:>sw$}{RESET} {DIM}{blocks:<bw$}{RESET} {DIM}{sparse}{RESET} {DIM}{ino:<iw$}{RESET} {DIM}{dev:<dw$}{RESET} {DIM}{mtime:<tw$}{RESET} {DIM}{atime:<tw$}{RESET} {DIM}{ctime:<tw$}{RESET} {DIM}{birth:<tw$}{RESET} {ORANGE}{flags:<fw$}{RESET} {ORANGE}{xattrs:<xw$}{RESET}",
+        " {WHITE}{nlink:>nw$}{RESET} {LIGHT_BLUE}{user:<uw$}{RESET} {LIGHT_BLUE}{group:<gw$}{RESET} {SOFT}{size:>sw$}{RESET} {DIM}{blocks:<bw$}{RESET} {DIM}{sparse}{RESET} {DIM}{ino:<iw$}{RESET} {DIM}{dev:<dw$}{RESET} {DIM}{atime:<tw$}{RESET} {DIM}{ctime:<tw$}{RESET} {DIM}{birth:<tw$}{RESET} {ORANGE}{flags:<fw$}{RESET} {ORANGE}{xattrs:<xw$}{RESET}",
         user = e.user,
         group = e.group,
         nw = w.nlink,
@@ -227,7 +233,6 @@ fn write_all(out: &mut impl Write, e: &Entry, w: &Widths, xfs: bool) -> io::Resu
         tw = w.time,
         fw = w.flags,
         xw = w.xattrs,
-        mtime = fmt_time_short(e.mtime),
         atime = fmt_time_short(e.atime),
         ctime = fmt_epoch_short(e.ctime_secs),
         birth = fmt_time_short(e.birth),
