@@ -348,7 +348,12 @@ pub fn write_entry_cards(
     }
 
     let term = terminal_width().unwrap_or(80);
-    let meta: Vec<Column> = cols.iter().copied().filter(|c| *c != Column::Name).collect();
+    // Skip Name (title), Group (already in USER as user/group), Other (in PERMS triads).
+    let meta: Vec<Column> = cols
+        .iter()
+        .copied()
+        .filter(|c| !matches!(c, Column::Name | Column::Group | Column::Other))
+        .collect();
     let label_w = meta
         .iter()
         .map(|c| c.header().len())
